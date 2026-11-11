@@ -88,7 +88,14 @@ for (const name of names) {
     if (message.type() === 'error' || message.type() === 'warn') console.log(`[${name}] ${message.text()}`);
   });
   page.on('pageerror', (error) => console.log(`[${name}] PAGE ERROR ${error.message}`));
-  await shots[name](page);
+  if (name.startsWith('inspect:')) {
+    // inspect:<class>:<angle>:<dist>:<height>[:track]
+    const [, ship, angle = '0.7', dist = '0.9', h = '0.2', track = 'island-loop'] = name.split(':');
+    await page.goto(`${BASE}?inspect=${ship}&angle=${angle}&dist=${dist}&h=${h}&track=${track}`);
+    await wait(2500);
+  } else {
+    await shots[name](page);
+  }
   const fps = await page.evaluate(
     () =>
       new Promise((resolve) => {
@@ -102,7 +109,7 @@ for (const name of names) {
         requestAnimationFrame(tick);
       }),
   );
-  await page.screenshot({ path: `${OUT}/${name}.png` });
+  await page.screenshot({ path: `${OUT}/${name.replaceAll(':', '_')}.png` });
   console.log(`${name}: ${fps} fps`);
   await page.close();
 }

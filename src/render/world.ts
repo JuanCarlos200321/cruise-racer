@@ -121,8 +121,8 @@ export class World {
   clearShips(): void {
     for (const ship of this.ships) {
       this.scene.remove(ship.root, ship.wake.mesh);
+      // Ship geometry and materials are shared by every ship of a class, so they are kept.
       ship.wake.dispose();
-      disposeTree(ship.root, false);
     }
     this.ships.length = 0;
   }
@@ -138,18 +138,17 @@ export class World {
 
   dispose(): void {
     this.clearShips();
-    disposeTree(this.scene, true);
+    disposeTree(this.scene);
     this.environment?.dispose();
   }
 }
 
-/** Free GPU resources. Ship materials are shared between ships, so they are kept. */
-function disposeTree(root: THREE.Object3D, materialsToo: boolean): void {
+/** Free the GPU resources of everything under an object. */
+function disposeTree(root: THREE.Object3D): void {
   root.traverse((object) => {
     const mesh = object as THREE.Mesh;
     if (!mesh.isMesh) return;
     mesh.geometry.dispose();
-    if (!materialsToo) return;
     const list = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
     for (const material of list) {
       const map = (material as THREE.MeshStandardMaterial).map;

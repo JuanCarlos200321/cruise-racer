@@ -43,6 +43,7 @@ let race!: Race;
 let views: ShipView[] = [];
 let previous: Pose[] = [];
 let demo = false;
+let inspect: { angle: number; distance: number; height: number } | null = null;
 
 let clock = 0;
 let accumulator = 0;
@@ -331,6 +332,13 @@ function frame(ms: number): void {
   if (inMenu) {
     const cls = player.cls;
     menuCentre.set(playerPose.x, cls.height * 0.35, playerPose.z);
+    if (inspect) {
+      rig.setFraming(0, 0);
+      rig.orbit(menuCentre, cls.length * inspect.distance, cls.length * inspect.height, playerPose.heading + inspect.angle);
+      world.update(clock, rig.camera, rig.focus);
+      renderer.render(world.scene, rig.camera);
+      return;
+    }
     const wide = screen === 'title' ? 1.5 : 1.15;
     if (screen === 'ship') rig.setFraming(0.16, 0.04);
     else if (screen === 'track') rig.setFraming(0, 0.16);
@@ -368,6 +376,8 @@ function frame(ms: number): void {
 
 // ?demo=<track id>&ship=<class id> starts a race with the AI at the player's
 // helm. &t=<seconds> runs the race ahead first, and &cam=bridge picks the camera.
+// ?inspect=<class id>&angle=<radians>&dist=<lengths>&h=<lengths> shows one ship
+// from a fixed angle with no menus, for checking the models.
 const params = new URLSearchParams(location.search);
 const demoTrack = params.get('demo');
 if (demoTrack !== null) {
@@ -379,6 +389,16 @@ if (demoTrack !== null) {
   const ahead = Number(params.get('t') ?? 0) + COUNTDOWN_SECONDS;
   for (let i = 0; i < ahead / STEP; i++) race.step(STEP, { throttle: 0, rudder: 0 });
   previous = race.racers.map((racer) => ({ ...racer.state }));
+} else if (params.get('inspect') !== null) {
+  shipIndex = Math.max(0, SHIP_CLASSES.findIndex((cls: ShipClass) => cls.id === params.get('inspect')));
+  trackIndex = Math.max(0, TRACKS.findIndex((def) => def.id === params.get('track')));
+  inspect = {
+    angle: Number(params.get('angle') ?? 0.7),
+    distance: Number(params.get('dist') ?? 0.9),
+    height: Number(params.get('h') ?? 0.2),
+  };
+  openMenu('ship');
+  document.getElementById('ui')!.style.display = 'none';
 } else {
   openMenu('title');
 }
