@@ -21,12 +21,12 @@ export interface HudState {
   rudder: number;
   position: number;
   fieldSize: number;
-  lap: number;
-  totalLaps: number;
+  /** Metres still to go to the finish line. */
+  toGo: number;
   raceTime: number;
-  lapTime: number;
-  bestLap: number | null;
-  lastLap: number | null;
+  /** Name and distance in metres of the next hazard ahead, if there is one. */
+  nextHazard: { name: string; distance: number } | null;
+  hazardHits: number;
   /** Seconds to the start, or negative once racing. */
   countdown: number;
   message: { text: string; kind: 'warn' | 'info' } | null;
@@ -39,7 +39,7 @@ export interface ResultRow {
   name: string;
   className: string;
   time: string;
-  bestLap: string;
+  note: string;
   isPlayer: boolean;
 }
 
@@ -55,7 +55,7 @@ const TEMPLATE = /* html */ `
 <section class="screen" id="title">
   <div class="logo">
     <h1>Cruise<br /><span>Racer</span></h1>
-    <div class="tagline">250,000 tons. Three laps. No brakes.</div>
+    <div class="tagline">250,000 tons. Open water. Sharks, pirates and a kraken.</div>
   </div>
   <div class="start">
     <button class="primary" data-cmd="start">Set sail</button>
@@ -94,7 +94,7 @@ const TEMPLATE = /* html */ `
 <section class="screen" id="track">
   <div class="menu-header">
     <div class="label">Step 2 of 2</div>
-    <h2 class="heading">Choose your course</h2>
+    <h2 class="heading">Choose your voyage</h2>
   </div>
   <div class="track-cards" id="track-cards"></div>
   <div class="menu-footer">
@@ -111,13 +111,12 @@ const TEMPLATE = /* html */ `
   </div>
   <div class="hud-box" id="hud-board"></div>
   <div class="hud-box" id="hud-lap">
-    <div class="label">Lap</div>
-    <div class="big" id="hud-lap-count"></div>
+    <div class="label" id="hud-destination"></div>
+    <div class="big" id="hud-to-go"></div>
     <div class="times">
-      <span>Race</span><b id="hud-race-time"></b>
-      <span>Lap</span><b id="hud-lap-time"></b>
-      <span>Last</span><b id="hud-last-lap"></b>
-      <span>Best</span><b id="hud-best-lap"></b>
+      <span>Time</span><b id="hud-race-time"></b>
+      <span>Next hazard</span><b id="hud-next-hazard"></b>
+      <span>Hazards hit</span><b id="hud-hazard-hits"></b>
     </div>
   </div>
   <div class="hud-box" id="hud-map"><canvas id="hud-map-canvas"></canvas></div>
@@ -164,7 +163,7 @@ const TEMPLATE = /* html */ `
     <table class="results-table" id="results-table"></table>
     <div class="buttons">
       <button class="primary" data-cmd="restart">Race again</button>
-      <button data-cmd="quit">Change ship or course</button>
+      <button data-cmd="quit">Change ship or voyage</button>
     </div>
   </div>
 </section>
@@ -202,7 +201,7 @@ export class Ui {
       map.draw();
       this.trackMaps.push(map);
       card.querySelector('[data-length]')!.textContent =
-        `${(track.length / 1852).toFixed(1)} nautical miles · 3 laps`;
+        `${(track.raceLength / 1852).toFixed(1)} nautical miles · ${tracks[i].hazards.length} hazards`;
       card.addEventListener('click', () => {
         const wasSelected = card.classList.contains('on');
         this.emit({ type: 'track-pick', index: i });
@@ -263,9 +262,10 @@ export class Ui {
       .forEach((card, i) => card.classList.toggle('on', i === index));
   }
 
-  /** Prepare the HUD for a race on a track with a given number of rivals. */
+  /** Prepare the HUD for a race on a route with a given number of rivals. */
   beginRace(track: Track, rivals: number): void {
     this.map.setTrack(track);
+    this.el('hud-destination').textContent = `To ${track.def.to}`;
     const tags = this.el('hud-tags');
     tags.innerHTML = '';
     this.tagElements.length = 0;
@@ -278,19 +278,24 @@ export class Ui {
     this.lastBoard = '';
   }
 
-  drawMap(markers: Parameters<Minimap['draw']>[0], nextCheckpoint: number): void {
-    this.map.draw(markers, nextCheckpoint);
+  drawMap(
+    markers: Parameters<Minimap['draw']>[0],
+    nextCheckpoint: number,
+    dangers: Parameters<Minimap['draw']>[2],
+  ): void {
+    this.map.draw(markers, nextCheckpoint, dangers);
   }
 
   updateHud(hud: HudState): void {
     this.el('hud-knots').textContent = hud.knots.toFixed(1);
     this.el('hud-pos').textContent = ordinal(hud.position);
     this.el('hud-field').textContent = ` / ${hud.fieldSize}`;
-    this.el('hud-lap-count').textContent = `${hud.lap} / ${hud.totalLaps}`;
+    this.el('hud-to-go').textContent = hud.toGo > 0 ? `${(hud.toGo / 1852).toFixed(1)} nm` : 'Arrived';
     this.el('hud-race-time').textContent = formatTime(hud.raceTime);
-    this.el('hud-lap-time').textContent = formatTime(hud.lapTime);
-    this.el('hud-last-lap').textContent = hud.lastLap === null ? '-:--.--' : formatTime(hud.lastLap);
-    this.el('hud-best-lap').textContent = hud.bestLap === null ? '-:--.--' : formatTime(hud.bestLap);
+    this.el('hud-next-hazard').textContent = hud.nextHazard
+      ? `${hud.nextHazard.name} · ${Math.round(hud.nextHazard.distance / 50) * 50} m`
+      : 'None';
+    this.el('hud-hazard-hits').textContent = String(hud.hazardHits);
 
     this.setGauge('hud-throttle', hud.throttle);
     this.setGauge('hud-rudder', hud.rudder);
@@ -340,14 +345,14 @@ export class Ui {
   showResults(trackName: string, playerPosition: number, rows: ResultRow[]): void {
     this.el('results-track').textContent = trackName;
     this.el('results-title').textContent =
-      playerPosition === 1 ? 'You win' : `You finished ${ordinal(playerPosition)}`;
+      playerPosition === 1 ? 'First into port' : `You arrived ${ordinal(playerPosition)}`;
     this.el('results-table').innerHTML = rows
       .map(
         (row) => /* html */ `
         <tr class="${row.isPlayer ? 'me' : ''}">
           <td>${row.position}</td>
           <td>${row.name}<div class="cls">${row.className}</div></td>
-          <td>${row.time}<div class="cls">${row.bestLap}</div></td>
+          <td>${row.time}<div class="cls">${row.note}</div></td>
         </tr>`,
       )
       .join('');

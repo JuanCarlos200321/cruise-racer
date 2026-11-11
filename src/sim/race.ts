@@ -1,5 +1,6 @@
 import { AiDriver } from './ai';
 import { resolveObstacles, resolveShips } from './collision';
+import { HazardField, type HazardEvent } from './hazards';
 import { createShipState, forward, starboard, stepShip, type Helm, type ShipState } from './physics';
 import type { ShipClass } from './ships';
 import type { Track } from './track';
@@ -12,6 +13,13 @@ export interface RaceEntry {
   pace: number;
   /** Let the AI steer the player's ship, for demos. */
   autopilot?: boolean;
+}
+
+export interface RaceOptions {
+  /** Put the route's hazards in the water. On by default. */
+  hazards?: boolean;
+  /** Send ships back to the start when they reach the end, for the cruise behind the menus. */
+  loop?: boolean;
 }
 
 export interface Racer {
@@ -29,9 +37,6 @@ export interface Racer {
   lateral: number;
   /** Samples travelled since the start line. Negative on the grid. */
   progress: number;
-  lapsDone: number;
-  lapTimes: number[];
-  lapStart: number;
   finished: boolean;
   finishTime: number;
   offCourse: boolean;
@@ -40,6 +45,8 @@ export interface Racer {
   impact: number;
   /** Seconds this ship has been all but stopped during the race. */
   stalledFor: number;
+  /** Times a hazard has caught this ship. */
+  hazardHits: number;
 }
 
 export type RacePhase = 'countdown' | 'racing';
@@ -51,28 +58,33 @@ const DRAFT_LENGTH = 450;
 const GRID_FRONT_ROW = 260;
 const GRID_ROW_GAP = 440;
 const GRID_LANES = [-0.5, 0, 0.5];
-/** An AI ship stopped for this long is put back on the course. */
+/** An AI ship stopped for this long is put back on the route. */
 const AI_RESCUE_AFTER = 10;
 
+/** A race from the start line of a route to its finish line. */
 export class Race {
   readonly track: Track;
-  readonly totalLaps: number;
   readonly racers: Racer[] = [];
+  readonly hazards: HazardField | null;
+  /** Hazard hits since the list was last emptied. The caller empties it. */
+  readonly events: HazardEvent[] = [];
   phase: RacePhase = 'countdown';
   /** Seconds until the start. */
   countdown = COUNTDOWN_SECONDS;
   /** Seconds since the start. */
   time = 0;
+  private readonly loop: boolean;
 
   /** Entries are placed on the grid in order: front row first, port to starboard. */
-  constructor(track: Track, entries: RaceEntry[], totalLaps: number) {
+  constructor(track: Track, entries: RaceEntry[], options: RaceOptions = {}) {
     this.track = track;
-    this.totalLaps = totalLaps;
+    this.loop = options.loop ?? false;
+    this.hazards = (options.hazards ?? true) ? new HazardField(track) : null;
     entries.forEach((entry, slot) => {
       const row = Math.floor(slot / GRID_LANES.length);
-      const lane = GRID_LANES[slot % GRID_LANES.length] * track.halfWidth;
+      const lane = GRID_LANES[slot % GRID_LANES.length] * Math.min(track.halfWidth, 300);
       const back = Math.round((GRID_FRONT_ROW + row * GRID_ROW_GAP) / track.spacing);
-      const index = track.wrap(-back);
+      const index = track.clampIndex(track.startIndex - back);
       const p = track.pointAt(index, lane);
       this.racers.push({
         id: slot,
@@ -84,16 +96,14 @@ export class Race {
         ai: new AiDriver(entry.pace, lane * 0.45),
         trackIndex: index,
         lateral: lane,
-        progress: -back,
-        lapsDone: 0,
-        lapTimes: [],
-        lapStart: 0,
+        progress: index - track.startIndex,
         finished: false,
         finishTime: 0,
         offCourse: false,
         drafting: false,
         impact: 0,
         stalledFor: 0,
+        hazardHits: 0,
       });
     });
   }
@@ -104,9 +114,9 @@ export class Race {
     return player;
   }
 
-  /** Lap a racer is on, 1-based, capped at the race length. */
-  lapOf(racer: Racer): number {
-    return Math.min(this.totalLaps, racer.lapsDone + 1);
+  /** Metres a racer still has to go to the finish line. */
+  distanceToGo(racer: Racer): number {
+    return Math.max(0, this.track.finishIndex - racer.trackIndex) * this.track.spacing;
   }
 
   /** Racers in race order: finishers by time, then the rest by distance covered. */
@@ -131,12 +141,17 @@ export class Race {
     }
     this.time += dt;
 
+    const hazards = this.hazards?.hazards ?? [];
     for (const racer of this.racers) {
       const others = this.racers.filter((r) => r !== racer);
-      const helm =
-        !racer.autopilot && !racer.finished
-          ? playerHelm
-          : racer.ai.helm(racer, this.track, others, dt);
+      let helm: Helm;
+      if (!racer.autopilot && !racer.finished) {
+        helm = playerHelm;
+      } else {
+        helm = racer.ai.helm(racer, this.track, others, dt, hazards);
+        // Past the line, ships come to a stop in the water off the destination.
+        if (racer.finished) helm = { throttle: racer.state.u > 2 ? -1 : 0, rudder: helm.rudder };
+      }
       racer.drafting = this.isDrafting(racer, others);
       let drag = 1;
       if (racer.offCourse) drag = OFF_COURSE_DRAG;
@@ -144,8 +159,19 @@ export class Race {
       stepShip(racer.state, helm, racer.cls, dt, drag);
     }
 
+    if (this.hazards) {
+      for (const event of this.hazards.step(dt, this.racers)) {
+        this.racers[event.shipId].hazardHits++;
+        this.events.push(event);
+      }
+    }
+    const solids = this.hazards?.solids() ?? [];
+
     for (const racer of this.racers) {
       racer.impact = resolveObstacles(racer.state, racer.cls, this.track.obstacles);
+      if (solids.length) {
+        racer.impact = Math.max(racer.impact, resolveObstacles(racer.state, racer.cls, solids));
+      }
     }
     for (let i = 0; i < this.racers.length; i++) {
       for (let j = i + 1; j < this.racers.length; j++) {
@@ -159,41 +185,40 @@ export class Race {
 
     for (const racer of this.racers) {
       this.updateProgress(racer);
-      const aiHelmed = racer.autopilot || racer.finished;
-      racer.stalledFor = Math.abs(racer.state.u) < 5 ? racer.stalledFor + dt : 0;
-      if (aiHelmed && racer.stalledFor > AI_RESCUE_AFTER) {
+      if (racer.finished) continue;
+      const held = this.hazards?.isHeld(racer.id) ?? false;
+      if (held) racer.ai.held();
+      racer.stalledFor = Math.abs(racer.state.u) < 5 && !held ? racer.stalledFor + dt : 0;
+      if (racer.autopilot && racer.stalledFor > AI_RESCUE_AFTER) {
         this.resetToCheckpoint(racer);
         racer.stalledFor = 0;
       }
     }
   }
 
-  /** Put a racer back on the centreline at the last checkpoint, stopped. */
+  /** Put a racer back on the centreline at the last checkpoint passed, stopped. */
   resetToCheckpoint(racer: Racer): void {
-    const n = this.track.sampleCount;
-    let back = Infinity;
+    let index = this.track.checkpoints[0];
     for (const checkpoint of this.track.checkpoints) {
-      const behind = this.track.wrap(racer.trackIndex - checkpoint);
-      if (behind < back) back = behind;
+      if (checkpoint <= racer.trackIndex) index = checkpoint;
     }
-    if (back > n / 2) back = 0;
-    this.placeAt(racer, this.track.wrap(racer.trackIndex - back));
-    racer.progress -= back;
+    this.placeAt(racer, index);
   }
 
-  /** Put a racer on the centreline at a sample, stopped and facing along the course. */
+  /** Put a racer on the centreline at a sample, stopped and facing along the route. */
   private placeAt(racer: Racer, index: number): void {
     const p = this.track.pointAt(index);
     racer.state = createShipState(p.x, p.z, this.track.headingAt(index));
     racer.trackIndex = index;
     racer.lateral = 0;
+    racer.progress = index - this.track.startIndex;
     racer.offCourse = false;
   }
 
-  /** Start a racer part of the way round the lap, already under way. Used behind the menus. */
-  cruiseFrom(racer: Racer, lapFraction: number, speedFraction: number): void {
-    this.placeAt(racer, this.track.wrap(Math.round(lapFraction * this.track.sampleCount)));
-    racer.progress = racer.trackIndex;
+  /** Start a racer part of the way along the route, already under way. Used behind the menus. */
+  cruiseFrom(racer: Racer, fraction: number, speedFraction: number): void {
+    const { startIndex, finishIndex } = this.track;
+    this.placeAt(racer, startIndex + Math.round(fraction * (finishIndex - startIndex)));
     racer.state.u = racer.cls.topSpeed * speedFraction;
     racer.state.throttle = speedFraction * speedFraction;
     this.countdown = 0;
@@ -202,19 +227,11 @@ export class Race {
   /** Checkpoint the racer is heading for next, as an index into track.checkpoints. */
   nextCheckpoint(racer: Racer): number {
     const checkpoints = this.track.checkpoints;
-    let best = 0;
-    let bestAhead = Infinity;
-    checkpoints.forEach((checkpoint, k) => {
-      const ahead = this.track.wrap(checkpoint - racer.trackIndex - 1);
-      if (ahead < bestAhead) {
-        bestAhead = ahead;
-        best = k;
-      }
-    });
-    return best;
+    const next = checkpoints.findIndex((checkpoint) => checkpoint > racer.trackIndex);
+    return next < 0 ? checkpoints.length - 1 : next;
   }
 
-  /** True when the ship is pointing against the direction of the course. */
+  /** True when the ship is pointing against the direction of the route. */
   isWrongWay(racer: Racer): boolean {
     const t = this.track.tangents[racer.trackIndex];
     const f = forward(racer.state.heading);
@@ -236,26 +253,23 @@ export class Race {
   }
 
   private updateProgress(racer: Racer): void {
-    const n = this.track.sampleCount;
-    const pos = this.track.nearest(racer.state.x, racer.state.z, racer.trackIndex);
-    let delta = pos.index - racer.trackIndex;
-    if (delta > n / 2) delta -= n;
-    if (delta < -n / 2) delta += n;
-    racer.progress += delta;
+    const track = this.track;
+    const pos = track.nearest(racer.state.x, racer.state.z, racer.trackIndex);
     racer.trackIndex = pos.index;
+    racer.progress = pos.index - track.startIndex;
     racer.lateral = pos.lateral;
-    racer.offCourse = Math.abs(pos.lateral) > this.track.halfWidth;
+    racer.offCourse = Math.abs(pos.lateral) > track.halfWidth;
 
-    if (racer.finished) return;
-    const lapsDone = Math.floor(racer.progress / n);
-    if (lapsDone > racer.lapsDone) {
-      racer.lapsDone = lapsDone;
-      racer.lapTimes.push(this.time - racer.lapStart);
-      racer.lapStart = this.time;
-      if (racer.lapsDone >= this.totalLaps) {
-        racer.finished = true;
-        racer.finishTime = this.time;
-      }
+    if (pos.index < track.finishIndex) return;
+    if (this.loop) {
+      const speed = racer.state.u;
+      const throttle = racer.state.throttle;
+      this.placeAt(racer, track.startIndex);
+      racer.state.u = speed;
+      racer.state.throttle = throttle;
+    } else if (!racer.finished) {
+      racer.finished = true;
+      racer.finishTime = this.time;
     }
   }
 }

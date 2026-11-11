@@ -1,7 +1,9 @@
 import * as THREE from 'three';
 import type { ShipClass } from '../sim/ships';
 import type { Track } from '../sim/track';
+import type { Hazard, HazardEvent } from '../sim/hazards';
 import { Course } from './course';
+import { HazardViews } from './hazards';
 import { createLand } from './land';
 import { createOcean, createShoreMap } from './ocean';
 import { bridgeOf, createShipModel, type BridgePosition } from './shipModel';
@@ -59,7 +61,7 @@ export class ShipView {
   }
 }
 
-/** Everything drawn for one track: sky, sea, land, course markers and ships. */
+/** Everything drawn for one route: sky, sea, land, channel markers, hazards and ships. */
 export class World {
   readonly scene = new THREE.Scene();
   readonly atmosphere: Atmosphere;
@@ -70,6 +72,7 @@ export class World {
   private readonly sky: THREE.Mesh;
   private readonly ocean: THREE.Mesh;
   private environment: THREE.WebGLRenderTarget | null = null;
+  private hazards: HazardViews | null = null;
 
   constructor(track: Track, renderer: THREE.WebGLRenderer) {
     this.atmosphere = atmosphereFor(track.def.theme);
@@ -116,6 +119,29 @@ export class World {
     this.ships.push(ship);
     this.scene.add(ship.root, ship.wake.mesh);
     return ship;
+  }
+
+  /** Put a race's hazards in the water, or take them all out. */
+  setHazards(hazards: Hazard[] | null): void {
+    if (this.hazards) {
+      this.scene.remove(this.hazards.group);
+      disposeTree(this.hazards.group);
+      this.hazards = null;
+    }
+    if (hazards && hazards.length) {
+      this.hazards = new HazardViews(hazards);
+      this.scene.add(this.hazards.group);
+    }
+  }
+
+  /** Move the hazards to where the simulation has them. */
+  updateHazards(hazards: Hazard[], now: number, dt: number): void {
+    this.hazards?.update(hazards, now, dt);
+  }
+
+  /** Show a hazard catching a ship. */
+  showHit(event: HazardEvent): void {
+    this.hazards?.burst(event);
   }
 
   clearShips(): void {

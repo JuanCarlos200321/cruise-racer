@@ -35,19 +35,19 @@ const shots = {
     await wait(5000);
   },
   'race-island': async (page) => {
-    await page.goto(`${BASE}?demo=island-loop&ship=icon&t=25`);
+    await page.goto(`${BASE}?demo=miami-cococay&ship=icon&t=3`);
     await wait(6000);
   },
   'race-harbour': async (page) => {
-    await page.goto(`${BASE}?demo=harbour-sprint&ship=radiance&t=40`);
+    await page.goto(`${BASE}?demo=canaveral-nassau&ship=radiance&t=40`);
     await wait(6000);
   },
   'race-fjord': async (page) => {
-    await page.goto(`${BASE}?demo=fjord-run&ship=oasis&t=45`);
+    await page.goto(`${BASE}?demo=seattle-juneau&ship=oasis&t=45`);
     await wait(6000);
   },
   bridge: async (page) => {
-    await page.goto(`${BASE}?demo=island-loop&ship=quantum&t=30&cam=bridge`);
+    await page.goto(`${BASE}?demo=miami-cococay&ship=quantum&t=30&cam=bridge`);
     await wait(5000);
   },
   drive: async (page) => {
@@ -63,11 +63,11 @@ const shots = {
     await wait(5000);
   },
   results: async (page) => {
-    await page.goto(`${BASE}?demo=island-loop&ship=radiance&t=400`);
+    await page.goto(`${BASE}?demo=miami-cococay&ship=radiance&t=420`);
     await wait(9000);
   },
   paused: async (page) => {
-    await page.goto(`${BASE}?demo=island-loop&ship=freedom&t=10`);
+    await page.goto(`${BASE}?demo=miami-cococay&ship=freedom&t=10`);
     await wait(2500);
     await page.keyboard.press('Escape');
     await wait(500);
@@ -88,9 +88,14 @@ for (const name of names) {
     if (message.type() === 'error' || message.type() === 'warn') console.log(`[${name}] ${message.text()}`);
   });
   page.on('pageerror', (error) => console.log(`[${name}] PAGE ERROR ${error.message}`));
-  if (name.startsWith('inspect:')) {
+  if (name.startsWith('hazard:')) {
+    // hazard:<route>:<n>[:<gap metres>[:<ship>[:<camera>]]] races up to the nth hazard on a route.
+    const [, route, n, gap = '500', ship = 'quantum', cam = 'chase'] = name.split(':');
+    await page.goto(`${BASE}?demo=${route}&ship=${ship}&near=${n}&gap=${gap}&cam=${cam}&solo`);
+    await wait(3500);
+  } else if (name.startsWith('inspect:')) {
     // inspect:<class>:<angle>:<dist>:<height>[:track]
-    const [, ship, angle = '0.7', dist = '0.9', h = '0.2', track = 'island-loop'] = name.split(':');
+    const [, ship, angle = '0.7', dist = '0.9', h = '0.2', track = 'miami-cococay'] = name.split(':');
     await page.goto(`${BASE}?inspect=${ship}&angle=${angle}&dist=${dist}&h=${h}&track=${track}`);
     await wait(2500);
   } else {

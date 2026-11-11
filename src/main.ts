@@ -2,18 +2,22 @@ import * as THREE from 'three';
 import { Input, type Action } from './input';
 import { CameraRig } from './render/camera';
 import { World, type ShipView } from './render/world';
-import { COUNTDOWN_SECONDS, Race, type RaceEntry, type Racer } from './sim/race';
+import { HAZARD_NAMES, type HazardEvent } from './sim/hazards';
+import { COUNTDOWN_SECONDS, Race, type RaceEntry, type RaceOptions, type Racer } from './sim/race';
 import { SHIP_CLASSES, toKnots, type ShipClass } from './sim/ships';
 import { Track, TRACKS } from './sim/track';
 import { formatTime, Ui, type HudState, type ResultRow, type ScreenId, type UiCommand } from './ui/ui';
 
 const STEP = 1 / 60;
 const MAX_STEPS_PER_FRAME = 5;
-const LAPS = 3;
 const RIVAL_PACES = [0.96, 0.94, 0.92, 0.9, 0.88];
 const PLAYER_AUTOPILOT_PACE = 0.95;
 const RESULTS_DELAY = 3;
 const TAG_RANGE = 2600;
+/** How long the message about a hazard catching the player stays up, seconds. */
+const HIT_MESSAGE_SECONDS = 3;
+/** A hazard this close ahead is called out on the HUD, metres. */
+const HAZARD_WARNING_RANGE = 1200;
 
 interface Pose {
   x: number;
@@ -43,14 +47,16 @@ let race!: Race;
 let views: ShipView[] = [];
 let previous: Pose[] = [];
 let demo = false;
+/** Demo with no rivals, for a clear view of the hazards. */
+let solo = false;
 let inspect: { angle: number; distance: number; height: number } | null = null;
 
 let clock = 0;
 let accumulator = 0;
 let lastFrame = performance.now() / 1000;
 let finishedAt: number | null = null;
-let finalLapAt: number | null = null;
 let resultsShownAt = 0;
+let lastHit: { event: HazardEvent; at: number } | null = null;
 
 function shuffled<T>(items: T[]): T[] {
   const copy = [...items];
@@ -68,23 +74,27 @@ function useWorld(index: number): void {
   worldTrack = index;
 }
 
-function beginRace(entries: RaceEntry[], laps: number): void {
+function beginRace(entries: RaceEntry[], options: RaceOptions = {}): void {
   world.clearShips();
-  race = new Race(tracks[worldTrack], entries, laps);
+  race = new Race(tracks[worldTrack], entries, options);
+  world.setHazards(race.hazards?.hazards ?? null);
+  lastHit = null;
   views = race.racers.map((racer) => world.addShip(racer.cls));
   previous = race.racers.map((racer) => ({ ...racer.state }));
   accumulator = 0;
   finishedAt = null;
-  finalLapAt = null;
   rig.snap();
 }
 
-/** Behind the menus, the chosen ship cruises the chosen course on its own. */
+/** Behind the menus, the chosen ship cruises the chosen route on its own, with no hazards. */
 function startMenuCruise(): void {
   useWorld(trackIndex);
   const cls = SHIP_CLASSES[shipIndex];
-  beginRace([{ cls, name: cls.shipNames[0], isPlayer: true, pace: 0.5, autopilot: true }], Infinity);
-  race.cruiseFrom(race.player, 0.3, 0.5);
+  beginRace([{ cls, name: cls.shipNames[0], isPlayer: true, pace: 0.5, autopilot: true }], {
+    hazards: false,
+    loop: true,
+  });
+  race.cruiseFrom(race.player, 0.02, 0.5);
   previous = race.racers.map((racer) => ({ ...racer.state }));
   world.course.setGatesVisible(false);
 }
@@ -93,7 +103,7 @@ function startRace(): void {
   useWorld(trackIndex);
   const player = SHIP_CLASSES[shipIndex];
   const paces = shuffled(RIVAL_PACES);
-  const rivals: RaceEntry[] = SHIP_CLASSES.map((cls, i) => ({
+  const rivals: RaceEntry[] = (solo ? [] : SHIP_CLASSES).map((cls, i) => ({
     cls,
     name: cls.shipNames[cls === player ? 1 : 0],
     isPlayer: false,
@@ -104,7 +114,7 @@ function startRace(): void {
     ...shuffled(rivals),
     { cls: player, name: player.shipNames[0], isPlayer: true, pace: PLAYER_AUTOPILOT_PACE, autopilot: demo },
   ];
-  beginRace(entries, LAPS);
+  beginRace(entries);
   world.course.setGatesVisible(true);
   ui.beginRace(race.track, rivals.length);
   setScreen('race');
@@ -208,6 +218,10 @@ function simulate(dt: number): void {
       p.heading = racer.state.heading;
     });
     race.step(STEP, helm);
+    for (const event of race.events.splice(0)) {
+      world.showHit(event);
+      if (event.shipId === race.player.id) lastHit = { event, at: race.time };
+    }
     accumulator -= STEP;
     steps++;
   }
@@ -236,7 +250,7 @@ function hudState(player: Racer, poses: Pose[]): HudState {
   if (race.phase === 'racing' && !player.finished) {
     if (race.isWrongWay(player) && player.state.u > 3) message = { text: 'Wrong way', kind: 'warn' };
     else if (player.offCourse) message = { text: 'Off course', kind: 'warn' };
-    else if (finalLapAt !== null && race.time - finalLapAt < 3) message = { text: 'Final lap', kind: 'info' };
+    else if (lastHit && race.time - lastHit.at < HIT_MESSAGE_SECONDS) message = { text: hitMessage(lastHit.event), kind: 'warn' };
     else if (player.drafting) message = { text: 'Slipstream', kind: 'info' };
   }
 
@@ -259,19 +273,27 @@ function hudState(player: Racer, poses: Pose[]): HudState {
       };
     });
 
-  const lapTimes = player.lapTimes;
+  // The nearest hazard still ahead on the route.
+  let nextHazard: HudState['nextHazard'] = null;
+  for (const hazard of race.hazards?.hazards ?? []) {
+    const distance = (hazard.index - player.trackIndex) * spacing;
+    if (distance < 0 || hazard.strength < 0.3) continue;
+    if (!nextHazard || distance < nextHazard.distance) nextHazard = { name: HAZARD_NAMES[hazard.kind], distance };
+  }
+  if (!message && nextHazard && nextHazard.distance < HAZARD_WARNING_RANGE && race.phase === 'racing' && !player.finished) {
+    message = { text: `${nextHazard.name} ahead`, kind: 'info' };
+  }
+
   return {
     knots: toKnots(Math.abs(player.state.u)),
     throttle: player.state.throttle,
     rudder: player.state.rudder,
     position: standings.indexOf(player) + 1,
     fieldSize: race.racers.length,
-    lap: race.lapOf(player),
-    totalLaps: race.totalLaps,
+    toGo: race.distanceToGo(player),
     raceTime: player.finished ? player.finishTime : race.time,
-    lapTime: player.finished ? lapTimes[lapTimes.length - 1] : race.time - player.lapStart,
-    bestLap: lapTimes.length ? Math.min(...lapTimes) : null,
-    lastLap: lapTimes.length ? lapTimes[lapTimes.length - 1] : null,
+    nextHazard,
+    hazardHits: player.hazardHits,
     countdown: race.phase === 'countdown' ? race.countdown : -1,
     message,
     board: standings.map((racer, i) => {
@@ -285,13 +307,26 @@ function hudState(player: Racer, poses: Pose[]): HudState {
   };
 }
 
+function hitMessage(event: HazardEvent): string {
+  switch (event.kind) {
+    case 'sharks':
+      return 'Sharks! Get clear of them';
+    case 'kraken':
+      return 'The kraken has you';
+    case 'pirate':
+      return 'Cannon fire!';
+    case 'wave':
+      return event.heavy ? 'Slammed by the wave' : 'Rode the wave';
+  }
+}
+
 function resultRows(): ResultRow[] {
   return race.standings().map((racer, i) => ({
     position: i + 1,
     name: racer.name,
     className: racer.cls.name,
-    time: racer.finished ? formatTime(racer.finishTime) : 'Still racing',
-    bestLap: racer.lapTimes.length ? `Best lap ${formatTime(Math.min(...racer.lapTimes))}` : '',
+    time: racer.finished ? formatTime(racer.finishTime) : 'Still at sea',
+    note: racer.hazardHits === 1 ? 'Caught by 1 hazard' : `Caught by ${racer.hazardHits} hazards`,
     isPlayer: racer.isPlayer,
   }));
 }
@@ -351,9 +386,6 @@ function frame(ms: number): void {
       rig.follow({ ...playerPose, speed: player.state.u }, player.cls, view.bridge, dt);
     }
 
-    if (race.lapOf(player) === race.totalLaps && finalLapAt === null && race.totalLaps > 1) {
-      finalLapAt = race.time;
-    }
     if (player.finished && finishedAt === null) finishedAt = clock;
     if (screen === 'race' && finishedAt !== null && clock - finishedAt > RESULTS_DELAY) {
       showResults();
@@ -367,27 +399,41 @@ function frame(ms: number): void {
     ui.drawMap(
       race.racers.map((racer, i) => ({ ...poses[i], isPlayer: racer.isPlayer })),
       next,
+      (race.hazards?.hazards ?? []).map((hazard) => ({ x: hazard.x, z: hazard.z, visible: hazard.strength > 0.3 })),
     );
   }
 
+  if (race.hazards) world.updateHazards(race.hazards.hazards, clock, running ? dt : 0);
   world.update(clock, rig.camera, rig.focus);
   renderer.render(world.scene, rig.camera);
 }
 
-// ?demo=<track id>&ship=<class id> starts a race with the AI at the player's
-// helm. &t=<seconds> runs the race ahead first, and &cam=bridge picks the camera.
+// ?demo=<route id>&ship=<class id> starts a race with the AI at the player's
+// helm. &t=<seconds> runs the race ahead first, &near=<n> runs it until the
+// player is coming up to the nth hazard, &solo leaves out the rivals, and
+// &cam=bridge picks the camera.
 // ?inspect=<class id>&angle=<radians>&dist=<lengths>&h=<lengths> shows one ship
 // from a fixed angle with no menus, for checking the models.
 const params = new URLSearchParams(location.search);
 const demoTrack = params.get('demo');
 if (demoTrack !== null) {
   demo = true;
+  solo = params.has('solo');
   trackIndex = Math.max(0, TRACKS.findIndex((def) => def.id === demoTrack));
   shipIndex = Math.max(0, SHIP_CLASSES.findIndex((cls: ShipClass) => cls.id === params.get('ship')));
   if (params.get('cam') === 'bridge') rig.mode = 'bridge';
   startRace();
   const ahead = Number(params.get('t') ?? 0) + COUNTDOWN_SECONDS;
   for (let i = 0; i < ahead / STEP; i++) race.step(STEP, { throttle: 0, rudder: 0 });
+  const near = race.hazards?.hazards[Number(params.get('near') ?? -1)];
+  if (near) {
+    const gap = Number(params.get('gap') ?? 500);
+    for (let i = 0; i < 600 / STEP; i++) {
+      if ((near.index - race.player.trackIndex) * race.track.spacing < gap) break;
+      race.step(STEP, { throttle: 0, rudder: 0 });
+    }
+  }
+  race.events.length = 0;
   previous = race.racers.map((racer) => ({ ...racer.state }));
 } else if (params.get('inspect') !== null) {
   shipIndex = Math.max(0, SHIP_CLASSES.findIndex((cls: ShipClass) => cls.id === params.get('inspect')));

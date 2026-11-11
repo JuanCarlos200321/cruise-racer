@@ -1,10 +1,10 @@
 import * as THREE from 'three';
 import type { Track } from '../sim/track';
 
-const BUOY_EVERY = 5; // centreline samples
+const BUOY_EVERY = 15; // centreline samples
 const PYLON_HEIGHT = 95;
 const BEACON_HEIGHT = 420;
-const START_GATE_HEIGHT = 190;
+const LINE_GATE_HEIGHT = 190;
 
 function checkerTexture(columns: number, rows: number): THREE.Texture {
   const canvas = document.createElement('canvas');
@@ -23,7 +23,7 @@ function checkerTexture(columns: number, rows: number): THREE.Texture {
   return texture;
 }
 
-/** Buoys, checkpoint gates and the start line for a track. */
+/** Channel buoys, checkpoint gates and the start and finish lines for a route. */
 export class Course {
   readonly group = new THREE.Group();
   private readonly beacons: THREE.Mesh[] = [];
@@ -34,7 +34,8 @@ export class Course {
     this.track = track;
     this.addBuoys();
     this.addGates();
-    this.addStartLine();
+    this.addLine(track.startIndex);
+    this.addLine(track.finishIndex);
     this.addBeacons();
   }
 
@@ -64,7 +65,7 @@ export class Course {
       [0, 13],
     ].map(([r, y]) => new THREE.Vector2(r, y));
     const geometry = new THREE.LatheGeometry(profile, 10);
-    const count = Math.floor(this.track.sampleCount / BUOY_EVERY);
+    const count = Math.floor((this.track.sampleCount - 1) / BUOY_EVERY) + 1;
     // Red marks the starboard edge of the course and green the port edge.
     for (const [side, color] of [
       [1, '#e3262c'],
@@ -89,9 +90,11 @@ export class Course {
   private addGates(): void {
     const geometry = new THREE.CylinderGeometry(3.5, 5, PYLON_HEIGHT, 12);
     const material = new THREE.MeshStandardMaterial({ color: '#f6c21c', roughness: 0.5 });
-    const pylons = new THREE.InstancedMesh(geometry, material, this.track.checkpoints.length * 2);
+    // The start and finish lines have towers of their own.
+    const gates = this.track.checkpoints.slice(1, -1);
+    const pylons = new THREE.InstancedMesh(geometry, material, gates.length * 2);
     const matrix = new THREE.Matrix4();
-    this.track.checkpoints.forEach((index, k) => {
+    gates.forEach((index, k) => {
       [-1, 1].forEach((side, i) => {
         const p = this.track.pointAt(index, side * this.track.halfWidth);
         matrix.makeTranslation(p.x, PYLON_HEIGHT / 2 - 2, p.z);
@@ -103,10 +106,11 @@ export class Course {
     this.group.add(pylons);
   }
 
-  private addStartLine(): void {
+  /** A chequered line on the water with a banner over it, for the start and the finish. */
+  private addLine(index: number): void {
     const width = this.track.halfWidth * 2;
-    const centre = this.track.samples[0];
-    const heading = this.track.headingAt(0);
+    const centre = this.track.samples[index];
+    const heading = this.track.headingAt(index);
 
     const line = new THREE.Mesh(
       new THREE.PlaneGeometry(width, 24),
@@ -133,15 +137,15 @@ export class Course {
       }),
     );
     banner.rotation.y = heading;
-    banner.position.set(centre.x, START_GATE_HEIGHT - 10, centre.z);
+    banner.position.set(centre.x, LINE_GATE_HEIGHT - 10, centre.z);
     this.group.add(banner);
 
     // Towers tall enough to carry the banner clear of the chase camera.
     const material = new THREE.MeshStandardMaterial({ color: '#f6c21c', roughness: 0.5 });
     for (const side of [-1, 1]) {
-      const p = this.track.pointAt(0, side * this.track.halfWidth);
-      const tower = new THREE.Mesh(new THREE.CylinderGeometry(5, 8, START_GATE_HEIGHT, 12), material);
-      tower.position.set(p.x, START_GATE_HEIGHT / 2 - 2, p.z);
+      const p = this.track.pointAt(index, side * this.track.halfWidth);
+      const tower = new THREE.Mesh(new THREE.CylinderGeometry(5, 8, LINE_GATE_HEIGHT, 12), material);
+      tower.position.set(p.x, LINE_GATE_HEIGHT / 2 - 2, p.z);
       tower.castShadow = true;
       this.group.add(tower);
     }
@@ -163,6 +167,6 @@ export class Course {
       this.beacons.push(beacon);
       this.group.add(beacon);
     }
-    this.setNextCheckpoint(0);
+    this.setNextCheckpoint(1);
   }
 }

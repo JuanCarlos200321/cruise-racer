@@ -1,5 +1,12 @@
 import type { Track } from '../sim/track';
 
+/** A hazard on the map. */
+interface Danger {
+  x: number;
+  z: number;
+  visible: boolean;
+}
+
 interface Marker {
   x: number;
   z: number;
@@ -7,7 +14,7 @@ interface Marker {
   isPlayer: boolean;
 }
 
-/** Draws a track, its obstacles and the ships on it, scaled to fit a canvas. */
+/** Draws a route, its land, hazards and the ships on it, scaled to fit a canvas. */
 export class Minimap {
   private readonly ctx: CanvasRenderingContext2D;
   private readonly size: number;
@@ -52,7 +59,7 @@ export class Minimap {
     return this.canvas.height / 2 - (z - this.offsetZ) * this.scale;
   }
 
-  draw(markers: Marker[] = [], nextCheckpoint = -1): void {
+  draw(markers: Marker[] = [], nextCheckpoint = -1, dangers: Danger[] = []): void {
     const track = this.track;
     if (!track) return;
     const ctx = this.ctx;
@@ -71,7 +78,7 @@ export class Minimap {
       if (i === 0) ctx.moveTo(this.px(p.x), this.py(p.z));
       else ctx.lineTo(this.px(p.x), this.py(p.z));
     });
-    ctx.closePath();
+    ctx.lineCap = 'round';
     ctx.strokeStyle = 'rgba(89, 216, 255, 0.35)';
     ctx.lineWidth = track.halfWidth * 2 * this.scale;
     ctx.stroke();
@@ -79,11 +86,31 @@ export class Minimap {
     ctx.lineWidth = Math.max(1.5, this.size / 150);
     ctx.stroke();
 
-    const start = track.samples[0];
+    // The start is a ring and the destination a filled dot.
+    const start = track.samples[track.startIndex];
+    const finish = track.samples[track.finishIndex];
+    ctx.strokeStyle = '#ffd23f';
     ctx.fillStyle = '#ffd23f';
-    ctx.fillRect(this.px(start.x) - this.size / 40, this.py(start.z) - this.size / 120, this.size / 20, this.size / 60);
+    ctx.lineWidth = this.size / 90;
+    ctx.beginPath();
+    ctx.arc(this.px(start.x), this.py(start.z), this.size / 36, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(this.px(finish.x), this.py(finish.z), this.size / 28, 0, Math.PI * 2);
+    ctx.fill();
 
-    if (nextCheckpoint >= 0) {
+    ctx.fillStyle = '#ff5a4f';
+    for (const danger of dangers) {
+      if (!danger.visible) continue;
+      const s = this.size / 46;
+      ctx.save();
+      ctx.translate(this.px(danger.x), this.py(danger.z));
+      ctx.rotate(Math.PI / 4);
+      ctx.fillRect(-s, -s, s * 2, s * 2);
+      ctx.restore();
+    }
+
+    if (nextCheckpoint >= 0 && nextCheckpoint < track.checkpoints.length - 1) {
       const gate = track.samples[track.checkpoints[nextCheckpoint]];
       ctx.strokeStyle = '#59d8ff';
       ctx.lineWidth = this.size / 110;

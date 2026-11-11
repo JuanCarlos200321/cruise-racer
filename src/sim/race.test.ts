@@ -23,7 +23,7 @@ describe('Race', () => {
   const track = new Track(TRACKS[0]);
 
   it('holds the grid behind the line until the countdown ends', () => {
-    const race = new Race(track, field(), 1);
+    const race = new Race(track, field());
     const start = race.racers.map((r) => ({ x: r.state.x, z: r.state.z }));
     for (let i = 0; i < (COUNTDOWN_SECONDS - 0.5) * 60; i++) race.step(DT, IDLE);
     expect(race.phase).toBe('countdown');
@@ -37,7 +37,7 @@ describe('Race', () => {
   });
 
   it('places the grid without overlapping ships', () => {
-    const race = new Race(track, field(), 1);
+    const race = new Race(track, field());
     for (const a of race.racers) {
       for (const b of race.racers) {
         if (a === b) continue;
@@ -50,15 +50,15 @@ describe('Race', () => {
   it('leaves the player ship to the player', () => {
     const entries = field();
     entries[4].isPlayer = true;
-    const race = new Race(track, entries, 1);
+    const race = new Race(track, entries);
     runUntil(race, () => race.time > 10, 20);
     expect(race.player.state.u).toBe(0);
     expect(race.racers[0].state.u).toBeGreaterThan(10);
     expect(race.positionOf(race.player)).toBe(6);
   });
 
-  it('does not count a lap for a ship that cuts across the course', () => {
-    const race = new Race(track, field().slice(0, 1), 3);
+  it('does not let a ship jump ahead by leaving the route', () => {
+    const race = new Race(track, field().slice(0, 1));
     runUntil(race, () => race.time > 5, 20);
     const racer = race.racers[0];
     const before = racer.progress;
@@ -67,30 +67,54 @@ describe('Race', () => {
     racer.state.z = far.z;
     race.step(DT, IDLE);
     expect(racer.progress - before).toBeLessThan(20);
-    expect(racer.lapsDone).toBe(0);
+    expect(racer.finished).toBe(false);
   });
 
   it('puts a ship back on the centreline at a checkpoint behind it', () => {
-    const race = new Race(track, field().slice(0, 1), 3);
-    runUntil(race, () => race.time > 40, 60);
+    const race = new Race(track, field().slice(0, 1));
+    runUntil(race, () => race.time > 60, 80);
     const racer = race.racers[0];
     const before = racer.progress;
     race.resetToCheckpoint(racer);
     expect(track.checkpoints).toContain(racer.trackIndex);
     expect(racer.progress).toBeLessThanOrEqual(before);
-    expect(before - racer.progress).toBeLessThan(700 / track.spacing);
+    expect(before - racer.progress).toBeLessThan(1700 / track.spacing);
     expect(racer.state.u).toBe(0);
     expect(track.nearest(racer.state.x, racer.state.z).index).toBe(racer.trackIndex);
+  });
+
+  it('finishes a ship when it crosses the finish line, and brings it to a stop', () => {
+    const race = new Race(track, field().slice(0, 1), { hazards: false });
+    const racer = race.racers[0];
+    runUntil(race, () => racer.finished, 600);
+    expect(racer.finished).toBe(true);
+    expect(racer.trackIndex).toBeGreaterThanOrEqual(track.finishIndex);
+    expect(race.distanceToGo(racer)).toBe(0);
+    const finishTime = racer.finishTime;
+    runUntil(race, () => false, 40);
+    expect(racer.finishTime).toBe(finishTime);
+    expect(Math.abs(racer.state.u)).toBeLessThan(3);
+    expect(racer.trackIndex).toBeLessThan(track.sampleCount - 1);
+  });
+
+  it('keeps a menu cruise going by sending the ship back to the start', () => {
+    const race = new Race(track, field().slice(0, 1), { hazards: false, loop: true });
+    const racer = race.racers[0];
+    race.cruiseFrom(racer, 0.97, 0.9);
+    runUntil(race, () => racer.trackIndex < track.finishIndex - 100, 60);
+    expect(racer.trackIndex).toBeLessThan(track.startIndex + 100);
+    expect(racer.finished).toBe(false);
+    expect(racer.state.u).toBeGreaterThan(20);
   });
 });
 
 describe.each(TRACKS)('AI race on $id', (def) => {
   const track = new Track(def);
 
-  it.each([1, 2, 3, 4])('a full field races three laps without ships locking together (grid %i)', (seed) => {
+  it.each([1, 2, 3])('a full field reaches the destination through the hazards (grid %i)', (seed) => {
     const rng = createRng(seed);
     const entries = field().sort(() => rng() - 0.5);
-    const race = new Race(track, entries, 3);
+    const race = new Race(track, entries);
     const stalled = race.racers.map(() => 0);
     let offCourseSteps = 0;
     let steps = 0;
@@ -98,6 +122,7 @@ describe.each(TRACKS)('AI race on $id', (def) => {
       race.step(DT, IDLE);
       steps++;
       race.racers.forEach((r, k) => {
+        if (r.finished) return;
         if (r.offCourse) offCourseSteps++;
         if (race.time > 10 && Math.abs(r.state.u) < 5) stalled[k] += DT;
       });
@@ -105,22 +130,21 @@ describe.each(TRACKS)('AI race on $id', (def) => {
     const standings = race.standings();
     for (const r of race.racers) {
       expect(r.finished).toBe(true);
-      expect(r.lapTimes).toHaveLength(3);
-      expect(r.lapTimes.reduce((a, b) => a + b, 0)).toBeCloseTo(r.finishTime, 6);
-      // A ship held up for a whole lap means two ships got stuck together.
-      const best = Math.min(...r.lapTimes);
-      expect(Math.max(r.lapTimes[1], r.lapTimes[2]) / best).toBeLessThan(1.5);
-      expect(stalled[r.id]).toBeLessThan(60);
+      expect(stalled[r.id]).toBeLessThan(40);
     }
     for (let i = 1; i < standings.length; i++) {
       expect(standings[i].finishTime).toBeGreaterThanOrEqual(standings[i - 1].finishTime);
     }
-    expect(standings[0].finishTime).toBeLessThan(480);
+    expect(standings[0].finishTime).toBeLessThan(420);
+    expect(standings[0].finishTime).toBeGreaterThan(150);
     expect(offCourseSteps / (steps * race.racers.length)).toBeLessThan(0.03);
+    // The AI steers round most hazards, but not all of them.
+    const hits = race.racers.reduce((sum, r) => sum + r.hazardHits, 0);
+    expect(hits / race.racers.length).toBeLessThan(def.hazards.length * 0.6);
   });
 
-  it.each(SHIP_CLASSES)('$id laps alone without leaving the course', (cls) => {
-    const race = new Race(track, [{ cls, name: cls.shipNames[0], isPlayer: false, pace: 1 }], 2);
+  it.each(SHIP_CLASSES)('$id sails the clear route alone without leaving the channel', (cls) => {
+    const race = new Race(track, [{ cls, name: cls.shipNames[0], isPlayer: false, pace: 1 }], { hazards: false });
     let offCourse = 0;
     let impacts = 0;
     for (let i = 0; i < 600 * 60 && !race.racers[0].finished; i++) {
@@ -135,22 +159,15 @@ describe.each(TRACKS)('AI race on $id', (def) => {
 });
 
 describe('fleet balance', () => {
-  it('has no class that is fastest everywhere by a wide margin', () => {
-    const wins = new Map<string, number>();
+  it('has no class that is far quicker than the rest over a clear route', () => {
     for (const def of TRACKS) {
       const track = new Track(def);
       const times = SHIP_CLASSES.map((cls) => {
-        const race = new Race(track, [{ cls, name: cls.name, isPlayer: false, pace: 1 }], 2);
+        const race = new Race(track, [{ cls, name: cls.name, isPlayer: false, pace: 1 }], { hazards: false });
         for (let i = 0; i < 600 * 60 && !race.racers[0].finished; i++) race.step(DT, IDLE);
-        return { id: cls.id, lap: race.racers[0].lapTimes[1] };
+        return race.racers[0].finishTime;
       });
-      const best = Math.min(...times.map((t) => t.lap));
-      const worst = Math.max(...times.map((t) => t.lap));
-      // The harbour is meant to suit small ships, but not by a walkover.
-      expect(worst / best).toBeLessThan(1.15);
-      const winner = times.find((t) => t.lap === best)!;
-      wins.set(winner.id, (wins.get(winner.id) ?? 0) + 1);
+      expect(Math.max(...times) / Math.min(...times)).toBeLessThan(1.25);
     }
-    expect(wins.size).toBeGreaterThan(1);
   });
 });

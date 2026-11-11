@@ -14,6 +14,10 @@ const STUCK_SPEED = 4;
 const STUCK_AFTER = 3;
 const REVERSE_FOR = 4;
 const LANE_CHANGE_RATE = 60; // metres per second
+/** How far ahead the AI starts to steer round a hazard: metres, plus metres per m/s of speed. */
+const HAZARD_SIGHT = 500;
+const HAZARD_SIGHT_PER_SPEED = 14;
+const HAZARD_MARGIN = 30;
 
 /** What the AI needs to know about a ship, its own or another. */
 export interface AiShip {
@@ -23,6 +27,16 @@ export interface AiShip {
   trackIndex: number;
   /** Samples travelled since the start line. */
   progress: number;
+}
+
+/** What the AI needs to know about a hazard to steer round it. */
+export interface AiHazard {
+  /** Centreline sample it is at, and its distance to starboard of the centreline. */
+  index: number;
+  lateral: number;
+  /** Radius of the water to keep clear of, metres. */
+  r: number;
+  strength: number;
 }
 
 /** Hulls closer than this are treated as touching, metres. */
@@ -41,7 +55,7 @@ function hullGap(a: AiShip, b: AiShip): number {
   return gap;
 }
 
-/** Steers a ship round the course: follows a lane, slows for corners, avoids ships ahead. */
+/** Steers a ship along the route: follows a lane, slows for bends, avoids ships and hazards ahead. */
 export class AiDriver {
   /** 0..1. Scales both straight-line and corner speed. */
   readonly pace: number;
@@ -57,7 +71,13 @@ export class AiDriver {
     this.laneNow = lane;
   }
 
-  helm(self: AiShip, track: Track, others: AiShip[], dt: number): Helm {
+  /** Forget about being stuck: something has hold of the ship and backing off will not help. */
+  held(): void {
+    this.stuckFor = 0;
+    this.reversingFor = 0;
+  }
+
+  helm(self: AiShip, track: Track, others: AiShip[], dt: number, hazards: AiHazard[] = []): Helm {
     const s = self.state;
     const cls = self.cls;
     const trackIndex = self.trackIndex;
@@ -77,6 +97,21 @@ export class AiDriver {
       }
     }
     const laneLimit = Math.max(0, track.halfWidth - cls.beam * 1.5);
+
+    // Go round a hazard coming up, on whichever side is nearer and has room.
+    const sight = HAZARD_SIGHT + Math.abs(s.u) * HAZARD_SIGHT_PER_SPEED;
+    for (const hazard of hazards) {
+      if (hazard.strength < 0.3) continue;
+      const ahead = (hazard.index - trackIndex) * track.spacing;
+      if (ahead < -cls.length * 0.6 || ahead > sight) continue;
+      const clear = hazard.r + cls.beam * 1.5 + HAZARD_MARGIN;
+      if (Math.abs(hazard.lateral - wantedLane) >= clear) continue;
+      const sides = [hazard.lateral - clear, hazard.lateral + clear];
+      const open = sides.filter((lane) => Math.abs(lane) <= laneLimit);
+      if (open.length === 0) wantedLane = hazard.lateral > 0 ? sides[0] : sides[1];
+      else if (open.length === 1) wantedLane = open[0];
+      else wantedLane = Math.abs(sides[0] - this.laneNow) < Math.abs(sides[1] - this.laneNow) ? sides[0] : sides[1];
+    }
     wantedLane = clamp(wantedLane, -laneLimit, laneLimit);
     this.laneNow += clamp(wantedLane - this.laneNow, -LANE_CHANGE_RATE * dt, LANE_CHANGE_RATE * dt);
 
