@@ -20,20 +20,20 @@ This plan is a task list with interfaces. It does not duplicate the code.
 
 ## Tasks
 
-- [ ] 1. Scaffold: `package.json`, `tsconfig.json`, `index.html`, Vite, Vitest.
-- [ ] 2. `src/sim/ships.ts`: `ShipClass`, `SHIP_CLASSES`, `toKnots`.
-- [ ] 3. `src/sim/physics.ts`: `ShipState`, `Helm`, `stepShip`. Tests: reaches
+- [x] 1. Scaffold: `package.json`, `tsconfig.json`, `index.html`, Vite, Vitest.
+- [x] 2. `src/sim/ships.ts`: `ShipClass`, `SHIP_CLASSES`, `toKnots`.
+- [x] 3. `src/sim/physics.ts`: `ShipState`, `Helm`, `stepShip`. Tests: reaches
       top speed, turning loses speed, class ordering, no steering at rest.
-- [ ] 4. `src/sim/track.ts`: `Track` (spline sampling, `nearest`, `pointAt`,
+- [x] 4. `src/sim/track.ts`: `Track` (spline sampling, `nearest`, `pointAt`,
       walls) and `TRACKS`. Tests: closed, evenly sampled, obstacles clear of
       the course.
-- [ ] 5. `src/sim/collision.ts`: ship-obstacle and ship-ship resolution. Tests.
-- [ ] 6. `src/sim/ai.ts`: `AiDriver.helm`. Test: completes a lap on every
+- [x] 5. `src/sim/collision.ts`: ship-obstacle and ship-ship resolution. Tests.
+- [x] 6. `src/sim/ai.ts`: `AiDriver.helm`. Test: completes a lap on every
       track with every class.
-- [ ] 7. `src/sim/race.ts`: `Race` (grid, countdown, progress, laps,
+- [x] 7. `src/sim/race.ts`: `Race` (grid, countdown, progress, laps,
       positions, finish). Tests: lap counting, ordering, no course cutting.
-- [ ] 8. `src/render/`: ocean shader, sky and lighting, ship models, islands,
+- [x] 8. `src/render/`: ocean shader, sky and lighting, ship models, islands,
       buoys, gates, wakes, cameras.
-- [ ] 9. `src/input.ts` and `src/ui/`: menus, HUD, minimap, results, pause.
-- [ ] 10. `src/main.ts`: state machine and loop.
-- [ ] 11. Verify: tests, type check, production build, play in a browser.
+- [x] 9. `src/input.ts` and `src/ui/`: menus, HUD, minimap, results, pause.
+- [x] 10. `src/main.ts`: state machine and loop.
+- [x] 11. Verify: tests, type check, production build, play in a browser.

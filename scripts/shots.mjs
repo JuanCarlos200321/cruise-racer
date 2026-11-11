@@ -63,7 +63,7 @@ const shots = {
     await wait(5000);
   },
   results: async (page) => {
-    await page.goto(`${BASE}?demo=island-loop&ship=radiance&t=345`);
+    await page.goto(`${BASE}?demo=island-loop&ship=radiance&t=400`);
     await wait(9000);
   },
   paused: async (page) => {

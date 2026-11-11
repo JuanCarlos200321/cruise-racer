@@ -36,10 +36,10 @@ export function atmosphereFor(theme: TrackTheme): Atmosphere {
       };
     case 'harbour':
       return {
-        zenith: new THREE.Color('#34609c'),
-        horizon: new THREE.Color('#f3cfa8'),
-        sunColor: new THREE.Color('#ffd9b0'),
-        sunDir: sunDirection(21, 250),
+        zenith: new THREE.Color('#4474b4'),
+        horizon: new THREE.Color('#f2dcc6'),
+        sunColor: new THREE.Color('#ffe7cc'),
+        sunDir: sunDirection(25, 250),
         sunIntensity: 2.8,
         waterDeep: new THREE.Color('#0c2e45'),
         waterShallow: new THREE.Color('#2a6f78'),

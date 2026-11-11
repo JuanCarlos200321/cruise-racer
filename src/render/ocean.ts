@@ -191,7 +191,7 @@ export function createOcean(
         float wash = shoreSample.g + 0.18 * sin(uTime * 0.8 + surfNoise * 8.0);
         float surf = smoothstep(0.25, 0.6, wash) * (1.0 - smoothstep(0.9, 1.0, shoreSample.g));
         surf *= smoothstep(0.25, 0.6, surfNoise + 0.2);
-        color = mix(color, vec3(0.93, 0.97, 1.0) * (0.5 + 0.5 * sunUp), surf * 0.85);
+        color = mix(color, vec3(0.93, 0.97, 1.0) * (0.5 + 0.5 * sunUp), surf * 0.65);
 
         vec3 flatView = normalize(vec3(-V.x, 0.02, -V.z));
         float fog = 1.0 - exp(-uFogDensity * uFogDensity * dist * dist);

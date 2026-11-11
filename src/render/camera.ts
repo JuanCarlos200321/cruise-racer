@@ -53,9 +53,10 @@ export class CameraRig {
       const fx = Math.sin(pose.heading);
       const fz = Math.cos(pose.heading);
       // Stand on the bridge roof, looking out over the bow.
-      const eye = bridge.y + 5;
-      this.camera.position.set(pose.x + fx * bridge.z, eye, pose.z + fz * bridge.z);
-      this.lookAt.set(pose.x + fx * (bridge.z + 500), eye - 70, pose.z + fz * (bridge.z + 500));
+      const eye = bridge.y + 4;
+      const z = bridge.z + 9;
+      this.camera.position.set(pose.x + fx * z, eye, pose.z + fz * z);
+      this.lookAt.set(pose.x + fx * (z + 500), eye - 45, pose.z + fz * (z + 500));
       this.camera.lookAt(this.lookAt);
       this.focus.set(pose.x, 0, pose.z);
       this.setFov(62 + speedFraction * 8);
