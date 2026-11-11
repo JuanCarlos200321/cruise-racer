@@ -5,8 +5,8 @@ import type { Obstacle } from './track';
 const HULL_CIRCLE_COUNT = 5;
 const OBSTACLE_RESTITUTION = 0.15;
 const SHIP_RESTITUTION = 0.3;
-/** Fraction of speed kept per step while scraping along something. */
-const SCRAPE = 0.985;
+/** Sliding friction: speed along the surface lost per unit of speed lost into it. */
+const FRICTION = 0.35;
 
 interface HullCircle {
   x: number;
@@ -42,6 +42,29 @@ function setWorldVelocity(s: ShipState, vx: number, vz: number): void {
   s.v = vx * sb.x + vz * sb.z;
 }
 
+/**
+ * Velocity after an impulse along the contact normal (nx, nz), with friction
+ * taking some of the sliding speed. A hard hit costs a lot of speed; leaning
+ * on something costs little.
+ */
+function applyImpulse(
+  vx: number,
+  vz: number,
+  nx: number,
+  nz: number,
+  impulse: number,
+): { vx: number; vz: number } {
+  const normal = vx * nx + vz * nz;
+  const tx = vx - normal * nx;
+  const tz = vz - normal * nz;
+  const sliding = Math.hypot(tx, tz);
+  const kept = sliding > 1e-6 ? Math.max(0, sliding - FRICTION * impulse) / sliding : 0;
+  return {
+    vx: (normal + impulse) * nx + tx * kept,
+    vz: (normal + impulse) * nz + tz * kept,
+  };
+}
+
 /** Swing the hull away when it is pushed off-centre, so ships glance off rather than stick. */
 function nudgeHeading(s: ShipState, cls: ShipClass, pushX: number, pushZ: number, offset: number): void {
   const sb = starboard(s.heading);
@@ -74,8 +97,8 @@ export function resolveObstacles(s: ShipState, cls: ShipClass, obstacles: Obstac
       const into = vx * nx + vz * nz;
       if (into < 0) {
         impact = Math.max(impact, -into);
-        const bounce = -(1 + OBSTACLE_RESTITUTION) * into;
-        setWorldVelocity(s, (vx + nx * bounce) * SCRAPE, (vz + nz * bounce) * SCRAPE);
+        const after = applyImpulse(vx, vz, nx, nz, -(1 + OBSTACLE_RESTITUTION) * into);
+        setWorldVelocity(s, after.vx, after.vz);
       }
     }
   }
@@ -128,7 +151,8 @@ export function resolveShips(
   if (closing >= 0) return 0;
 
   const impulse = -(1 + SHIP_RESTITUTION) * closing;
-  setWorldVelocity(a, (va.vx + nx * impulse * shareA) * SCRAPE, (va.vz + nz * impulse * shareA) * SCRAPE);
-  setWorldVelocity(b, (vb.vx - nx * impulse * shareB) * SCRAPE, (vb.vz - nz * impulse * shareB) * SCRAPE);
+  // Hulls slide past each other freely; only the speed into the contact changes.
+  setWorldVelocity(a, va.vx + nx * impulse * shareA, va.vz + nz * impulse * shareA);
+  setWorldVelocity(b, vb.vx - nx * impulse * shareB, vb.vz - nz * impulse * shareB);
   return -closing;
 }

@@ -10,6 +10,8 @@ export interface RaceEntry {
   isPlayer: boolean;
   /** AI pace, 0..1. */
   pace: number;
+  /** Let the AI steer the player's ship, for demos. */
+  autopilot?: boolean;
 }
 
 export interface Racer {
@@ -17,6 +19,8 @@ export interface Racer {
   name: string;
   cls: ShipClass;
   isPlayer: boolean;
+  /** True when the AI is at the helm. */
+  autopilot: boolean;
   state: ShipState;
   ai: AiDriver;
   /** Nearest centreline sample. */
@@ -75,8 +79,9 @@ export class Race {
         name: entry.name,
         cls: entry.cls,
         isPlayer: entry.isPlayer,
+        autopilot: entry.autopilot ?? !entry.isPlayer,
         state: createShipState(p.x, p.z, track.headingAt(index)),
-        ai: new AiDriver(entry.pace, lane * 0.8),
+        ai: new AiDriver(entry.pace, lane * 0.45),
         trackIndex: index,
         lateral: lane,
         progress: -back,
@@ -129,9 +134,9 @@ export class Race {
     for (const racer of this.racers) {
       const others = this.racers.filter((r) => r !== racer);
       const helm =
-        racer.isPlayer && !racer.finished
+        !racer.autopilot && !racer.finished
           ? playerHelm
-          : racer.ai.helm(racer.state, racer.cls, this.track, racer.trackIndex, others, dt);
+          : racer.ai.helm(racer, this.track, others, dt);
       racer.drafting = this.isDrafting(racer, others);
       let drag = 1;
       if (racer.offCourse) drag = OFF_COURSE_DRAG;
@@ -154,7 +159,7 @@ export class Race {
 
     for (const racer of this.racers) {
       this.updateProgress(racer);
-      const aiHelmed = !racer.isPlayer || racer.finished;
+      const aiHelmed = racer.autopilot || racer.finished;
       racer.stalledFor = Math.abs(racer.state.u) < 5 ? racer.stalledFor + dt : 0;
       if (aiHelmed && racer.stalledFor > AI_RESCUE_AFTER) {
         this.resetToCheckpoint(racer);
@@ -172,13 +177,26 @@ export class Race {
       if (behind < back) back = behind;
     }
     if (back > n / 2) back = 0;
-    const index = this.track.wrap(racer.trackIndex - back);
+    this.placeAt(racer, this.track.wrap(racer.trackIndex - back));
+    racer.progress -= back;
+  }
+
+  /** Put a racer on the centreline at a sample, stopped and facing along the course. */
+  private placeAt(racer: Racer, index: number): void {
     const p = this.track.pointAt(index);
     racer.state = createShipState(p.x, p.z, this.track.headingAt(index));
     racer.trackIndex = index;
-    racer.progress -= back;
     racer.lateral = 0;
     racer.offCourse = false;
+  }
+
+  /** Start a racer part of the way round the lap, already under way. Used behind the menus. */
+  cruiseFrom(racer: Racer, lapFraction: number, speedFraction: number): void {
+    this.placeAt(racer, this.track.wrap(Math.round(lapFraction * this.track.sampleCount)));
+    racer.progress = racer.trackIndex;
+    racer.state.u = racer.cls.topSpeed * speedFraction;
+    racer.state.throttle = speedFraction * speedFraction;
+    this.countdown = 0;
   }
 
   /** Checkpoint the racer is heading for next, as an index into track.checkpoints. */

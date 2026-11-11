@@ -84,6 +84,8 @@ export class Track {
   readonly tangents: Vec2[] = [];
   /** Curvature (1 / turn radius) at each sample. */
   readonly curvature: number[] = [];
+  /** Curvature with a sign: positive where the course turns to starboard. */
+  readonly signedCurvature: number[] = [];
   readonly spacing: number;
   readonly length: number;
   readonly obstacles: Obstacle[] = [];
@@ -143,6 +145,7 @@ export class Track {
       const a = this.tangents[(i - 1 + n) % n];
       const b = this.tangents[(i + 1) % n];
       const turn = Math.atan2(a.x * b.z - a.z * b.x, a.x * b.x + a.z * b.z);
+      this.signedCurvature.push(turn / (2 * this.spacing));
       this.curvature.push(Math.abs(turn) / (2 * this.spacing));
     }
 
@@ -161,6 +164,15 @@ export class Track {
   wrap(index: number): number {
     const n = this.samples.length;
     return ((index % n) + n) % n;
+  }
+
+  /**
+   * Curvature of the path that runs parallel to the centreline, offset
+   * sideways. The inside of a bend is tighter than the outside.
+   */
+  curvatureAt(index: number, lateral: number): number {
+    const k = this.signedCurvature[this.wrap(index)];
+    return Math.abs(k) / Math.max(0.3, 1 - k * lateral);
   }
 
   /** Heading of the direction of travel at a sample. */

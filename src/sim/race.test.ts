@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { COUNTDOWN_SECONDS, Race, type RaceEntry } from './race';
+import { createRng } from './rng';
 import { SHIP_CLASSES } from './ships';
 import { Track, TRACKS } from './track';
 
@@ -86,26 +87,30 @@ describe('Race', () => {
 describe.each(TRACKS)('AI race on $id', (def) => {
   const track = new Track(def);
 
-  it('every ship finishes three laps cleanly', () => {
-    const race = new Race(track, field(), 3);
+  it.each([1, 2, 3, 4])('a full field races three laps without ships locking together (grid %i)', (seed) => {
+    const rng = createRng(seed);
+    const entries = field().sort(() => rng() - 0.5);
+    const race = new Race(track, entries, 3);
+    const stalled = race.racers.map(() => 0);
     let offCourseSteps = 0;
     let steps = 0;
     for (let i = 0; i < 900 * 60 && !race.racers.every((r) => r.finished); i++) {
       race.step(DT, IDLE);
       steps++;
-      for (const r of race.racers) if (r.offCourse) offCourseSteps++;
+      race.racers.forEach((r, k) => {
+        if (r.offCourse) offCourseSteps++;
+        if (race.time > 10 && Math.abs(r.state.u) < 5) stalled[k] += DT;
+      });
     }
     const standings = race.standings();
-    console.log(
-      `${def.id} (${Math.round(track.length)} m): ` +
-        standings
-          .map((r) => `${r.cls.id} ${r.finishTime.toFixed(0)}s best ${Math.min(...r.lapTimes).toFixed(1)}`)
-          .join(', '),
-    );
     for (const r of race.racers) {
       expect(r.finished).toBe(true);
       expect(r.lapTimes).toHaveLength(3);
       expect(r.lapTimes.reduce((a, b) => a + b, 0)).toBeCloseTo(r.finishTime, 6);
+      // A ship held up for a whole lap means two ships got stuck together.
+      const best = Math.min(...r.lapTimes);
+      expect(Math.max(r.lapTimes[1], r.lapTimes[2]) / best).toBeLessThan(1.5);
+      expect(stalled[r.id]).toBeLessThan(60);
     }
     for (let i = 1; i < standings.length; i++) {
       expect(standings[i].finishTime).toBeGreaterThanOrEqual(standings[i - 1].finishTime);
@@ -123,9 +128,7 @@ describe.each(TRACKS)('AI race on $id', (def) => {
       if (race.racers[0].offCourse) offCourse++;
       if (race.racers[0].impact > 0) impacts++;
     }
-    const racer = race.racers[0];
-    console.log(`  ${def.id} ${cls.id}: flying lap ${racer.lapTimes[1]?.toFixed(1)}s`);
-    expect(racer.finished).toBe(true);
+    expect(race.racers[0].finished).toBe(true);
     expect(offCourse).toBe(0);
     expect(impacts).toBe(0);
   });

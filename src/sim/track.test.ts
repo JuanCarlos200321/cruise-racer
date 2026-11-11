@@ -63,6 +63,19 @@ describe.each(TRACKS)('track $id', (def) => {
     expect((p.z - c.z) / 100).toBeCloseTo(t.x, 6);
   });
 
+  it('is tighter on the inside of a bend than the outside', () => {
+    let i = 0;
+    while (track.curvature[i] < 1 / 800) i++;
+    const inside = Math.sign(track.signedCurvature[i]) * 100;
+    expect(track.curvatureAt(i, inside)).toBeGreaterThan(track.curvature[i]);
+    expect(track.curvatureAt(i, -inside)).toBeLessThan(track.curvature[i]);
+    // A point on the inside lane really is closer to the centre of the bend.
+    const radius = 1 / track.curvature[i];
+    const centre = track.pointAt(i, Math.sign(track.signedCurvature[i]) * radius);
+    const p = track.pointAt(i, inside);
+    expect(Math.hypot(p.x - centre.x, p.z - centre.z)).toBeCloseTo(radius - 100, 0);
+  });
+
   it('spreads checkpoints round the lap, starting at the line', () => {
     expect(track.checkpoints[0]).toBe(0);
     expect(track.checkpoints.length).toBeGreaterThanOrEqual(4);

@@ -48,6 +48,21 @@ describe('resolveObstacles', () => {
   });
 });
 
+describe('sustained contact', () => {
+  it('does not stop a ship that is sliding along a shore', () => {
+    const island: Obstacle = { x: -200, z: 0, r: 150, kind: 'island', seed: 1 };
+    const s = createShipState(-24, -300, 0);
+    s.u = 40;
+    for (let i = 0; i < 300; i++) {
+      s.x += Math.sin(s.heading) * s.u / 60;
+      s.z += Math.cos(s.heading) * s.u / 60;
+      s.x -= 0.02; // keep leaning on the island
+      resolveObstacles(s, icon, [island]);
+    }
+    expect(s.u).toBeGreaterThan(25);
+  });
+});
+
 describe('resolveShips', () => {
   it('ignores ships that are apart', () => {
     const a = createShipState(0, 0, 0);
