@@ -13,6 +13,8 @@ export interface RaceEntry {
   pace: number;
   /** Let the AI steer the player's ship, for demos. */
   autopilot?: boolean;
+  /** Steered by another player over the network, through the racer's helm. */
+  human?: boolean;
 }
 
 export interface RaceOptions {
@@ -29,6 +31,8 @@ export interface Racer {
   isPlayer: boolean;
   /** True when the AI is at the helm. */
   autopilot: boolean;
+  /** Helm orders from a player elsewhere. Null for the local player and AI ships. */
+  helm: Helm | null;
   state: ShipState;
   ai: AiDriver;
   /** Nearest centreline sample. */
@@ -91,7 +95,8 @@ export class Race {
         name: entry.name,
         cls: entry.cls,
         isPlayer: entry.isPlayer,
-        autopilot: entry.autopilot ?? !entry.isPlayer,
+        autopilot: entry.autopilot ?? !(entry.isPlayer || entry.human),
+        helm: entry.human ? { throttle: 0, rudder: 0 } : null,
         state: createShipState(p.x, p.z, track.headingAt(index)),
         ai: new AiDriver(entry.pace, lane * 0.45),
         trackIndex: index,
@@ -132,7 +137,10 @@ export class Race {
     return this.standings().indexOf(racer) + 1;
   }
 
-  /** Advance the race. playerHelm is ignored once the player has finished. */
+  /**
+   * Advance the race. playerHelm steers the local player's ship; ships of
+   * players elsewhere follow their own helm. Both are ignored once finished.
+   */
   step(dt: number, playerHelm: Helm): void {
     if (this.phase === 'countdown') {
       this.countdown -= dt;
@@ -145,8 +153,9 @@ export class Race {
     for (const racer of this.racers) {
       const others = this.racers.filter((r) => r !== racer);
       let helm: Helm;
-      if (!racer.autopilot && !racer.finished) {
-        helm = playerHelm;
+      const human = racer.autopilot || racer.finished ? null : racer.isPlayer ? playerHelm : racer.helm;
+      if (human) {
+        helm = human;
       } else {
         helm = racer.ai.helm(racer, this.track, others, dt, hazards);
         // Past the line, ships come to a stop in the water off the destination.

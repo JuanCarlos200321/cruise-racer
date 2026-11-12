@@ -2,7 +2,7 @@ import { SHIP_CLASSES, statBars, toKnots, type ShipClass } from '../sim/ships';
 import { Track, type TrackDef } from '../sim/track';
 import { Minimap } from './minimap';
 
-export type ScreenId = 'title' | 'ship' | 'track' | 'race' | 'paused' | 'results';
+export type ScreenId = 'title' | 'ship' | 'track' | 'online' | 'lobby' | 'race' | 'paused' | 'results';
 
 export type UiCommand =
   | { type: 'start' }
@@ -10,6 +10,13 @@ export type UiCommand =
   | { type: 'ship-confirm' }
   | { type: 'track-pick'; index: number }
   | { type: 'track-confirm' }
+  | { type: 'track-step'; by: number }
+  | { type: 'online' }
+  | { type: 'host' }
+  | { type: 'join' }
+  | { type: 'leave' }
+  | { type: 'lobby-start' }
+  | { type: 'copy-link' }
   | { type: 'back' }
   | { type: 'resume' }
   | { type: 'restart' }
@@ -43,6 +50,25 @@ export interface ResultRow {
   isPlayer: boolean;
 }
 
+/** What the lobby screen shows. */
+export interface LobbyView {
+  code: string;
+  link: string;
+  players: { name: string; shipName: string; isMe: boolean; isHost: boolean }[];
+  shipName: string;
+  trackName: string;
+  isHost: boolean;
+  /** The host has a race under way that this player is not in. */
+  racing: boolean;
+}
+
+const NAME_KEY = 'cruise-racer-name';
+
+/** Text made safe to put into HTML. Names come from other players. */
+function esc(text: string): string {
+  return text.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+}
+
 export function formatTime(seconds: number): string {
   const minutes = Math.floor(seconds / 60);
   const rest = seconds - minutes * 60;
@@ -59,6 +85,7 @@ const TEMPLATE = /* html */ `
   </div>
   <div class="start">
     <button class="primary" data-cmd="start">Set sail</button>
+    <button data-cmd="online">Play with friends</button>
     <span class="hint">or press <kbd>Enter</kbd></span>
   </div>
 </section>
@@ -103,6 +130,61 @@ const TEMPLATE = /* html */ `
   </div>
 </section>
 
+<section class="screen" id="online">
+  <div class="menu-header">
+    <div class="label">Multiplayer</div>
+    <h2 class="heading">Play with friends</h2>
+  </div>
+  <div class="side-panel">
+    <label class="label" for="online-name">Your name</label>
+    <input id="online-name" maxlength="16" autocomplete="off" spellcheck="false" placeholder="Captain" />
+    <p>Start a game and send your friends the link, up to six players. Empty places are filled by AI ships.</p>
+    <button class="primary" data-cmd="host">Host a game</button>
+    <p>Or join a friend's game with their code.</p>
+    <div class="field-row">
+      <input id="online-code" maxlength="5" autocomplete="off" spellcheck="false" placeholder="CODE" />
+      <button data-cmd="join">Join</button>
+    </div>
+    <div id="online-status"></div>
+  </div>
+  <div class="menu-footer">
+    <button data-cmd="back">Back</button>
+  </div>
+</section>
+
+<section class="screen" id="lobby">
+  <div class="menu-header">
+    <div class="label">Game code</div>
+    <h2 class="heading" id="lobby-code"></h2>
+  </div>
+  <div class="side-panel">
+    <div class="label">Invite link</div>
+    <div class="field-row">
+      <input id="lobby-link" readonly />
+      <button data-cmd="copy-link" id="lobby-copy">Copy</button>
+    </div>
+    <div class="label">Players</div>
+    <div id="lobby-players"></div>
+    <div class="picker">
+      <span class="label">Your ship</span>
+      <button data-cmd="ship-prev" aria-label="Previous ship">&#9664;</button>
+      <b id="lobby-ship"></b>
+      <button data-cmd="ship-next" aria-label="Next ship">&#9654;</button>
+    </div>
+    <div class="picker" id="lobby-voyage">
+      <span class="label">Voyage</span>
+      <button data-cmd="track-prev" aria-label="Previous voyage">&#9664;</button>
+      <b id="lobby-track"></b>
+      <button data-cmd="track-next" aria-label="Next voyage">&#9654;</button>
+    </div>
+    <div id="lobby-note"></div>
+  </div>
+  <div class="menu-footer">
+    <button data-cmd="leave">Leave game</button>
+    <button class="primary" data-cmd="lobby-start" id="lobby-start">Start race</button>
+  </div>
+</section>
+
 <section class="screen" id="race">
   <div id="hud-tags"></div>
   <div class="hud-box" id="hud-position">
@@ -138,8 +220,8 @@ const TEMPLATE = /* html */ `
 
 <section class="screen overlay" id="paused">
   <div class="dialog">
-    <div class="label">Engines stopped</div>
-    <h2 class="heading">Paused</h2>
+    <div class="label" id="paused-label">Engines stopped</div>
+    <h2 class="heading" id="paused-title">Paused</h2>
     <div class="controls-list">
       <span><kbd>W</kbd> / <kbd>&uarr;</kbd></span><span>Engines ahead</span>
       <span><kbd>S</kbd> / <kbd>&darr;</kbd></span><span>Engines astern (this is your brake)</span>
@@ -151,7 +233,7 @@ const TEMPLATE = /* html */ `
     <div class="buttons">
       <button class="primary" data-cmd="resume">Resume</button>
       <button data-cmd="restart">Restart race</button>
-      <button data-cmd="quit">Quit to menu</button>
+      <button data-cmd="quit" data-offline="Quit to menu">Quit to menu</button>
     </div>
   </div>
 </section>
@@ -163,7 +245,7 @@ const TEMPLATE = /* html */ `
     <table class="results-table" id="results-table"></table>
     <div class="buttons">
       <button class="primary" data-cmd="restart">Race again</button>
-      <button data-cmd="quit">Change ship or voyage</button>
+      <button data-cmd="quit" data-offline="Change ship or voyage">Change ship or voyage</button>
     </div>
   </div>
 </section>
@@ -209,6 +291,20 @@ export class Ui {
       });
     });
 
+    const name = this.el<HTMLInputElement>('online-name');
+    try {
+      name.value = localStorage.getItem(NAME_KEY) ?? '';
+    } catch {
+      // Private browsing: start with no name.
+    }
+    const code = this.el<HTMLInputElement>('online-code');
+    code.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') this.emit({ type: 'join' });
+    });
+    this.el<HTMLInputElement>('lobby-link').addEventListener('focus', (event) =>
+      (event.target as HTMLInputElement).select(),
+    );
+
     this.map = new Minimap(this.el<HTMLCanvasElement>('hud-map-canvas'), 220);
 
     root.addEventListener('click', (event) => {
@@ -218,8 +314,73 @@ export class Ui {
       const cmd = button.dataset.cmd!;
       if (cmd === 'ship-prev') this.emit({ type: 'ship-step', by: -1 });
       else if (cmd === 'ship-next') this.emit({ type: 'ship-step', by: 1 });
+      else if (cmd === 'track-prev') this.emit({ type: 'track-step', by: -1 });
+      else if (cmd === 'track-next') this.emit({ type: 'track-step', by: 1 });
       else this.emit({ type: cmd } as UiCommand);
     });
+  }
+
+  /** The name the player has typed, remembered between visits. */
+  get playerName(): string {
+    const name = this.el<HTMLInputElement>('online-name').value.trim();
+    try {
+      localStorage.setItem(NAME_KEY, name);
+    } catch {
+      // Private browsing: the name just is not remembered.
+    }
+    return name;
+  }
+
+  get roomCode(): string {
+    return this.el<HTMLInputElement>('online-code').value;
+  }
+
+  set roomCode(code: string) {
+    this.el<HTMLInputElement>('online-code').value = code;
+  }
+
+  /** A line under the host and join buttons: progress, or what went wrong. */
+  setOnlineStatus(text: string): void {
+    this.el('online-status').textContent = text;
+  }
+
+  setLobby(view: LobbyView): void {
+    this.el('lobby-code').textContent = view.code;
+    this.el<HTMLInputElement>('lobby-link').value = view.link;
+    this.el('lobby-players').innerHTML = view.players
+      .map(
+        (p) => /* html */ `
+        <div class="row${p.isMe ? ' me' : ''}">
+          <span>${esc(p.name)}${p.isHost ? ' <small>host</small>' : ''}</span><span>${esc(p.shipName)}</span>
+        </div>`,
+      )
+      .join('');
+    this.el('lobby-ship').textContent = view.shipName;
+    this.el('lobby-track').textContent = view.trackName;
+    this.el('lobby-voyage').classList.toggle('fixed', !view.isHost);
+    this.el('lobby-start').style.display = view.isHost ? '' : 'none';
+    let note = '';
+    if (view.racing) note = 'A race is under way. You will be in the next one.';
+    else if (!view.isHost) note = 'Waiting for the host to start the race.';
+    else if (view.players.length === 1) note = 'Waiting for friends to join. You can start whenever you like.';
+    this.el('lobby-note').textContent = note;
+  }
+
+  /** Briefly confirm that the invite link was copied. */
+  linkCopied(): void {
+    const button = this.el('lobby-copy');
+    button.textContent = 'Copied';
+    setTimeout(() => (button.textContent = 'Copy'), 1500);
+  }
+
+  /** Fit the pause and results buttons to who is playing: alone, as host, or as a guest. */
+  setOnline(role: 'host' | 'client' | null): void {
+    this.root.classList.toggle('guest', role === 'client');
+    this.root.querySelectorAll<HTMLElement>('[data-cmd="quit"]').forEach((button) => {
+      button.textContent = role === 'host' ? 'Back to lobby' : role === 'client' ? 'Leave game' : button.dataset.offline!;
+    });
+    this.el('paused-label').textContent = role ? 'The race goes on' : 'Engines stopped';
+    this.el('paused-title').textContent = role ? 'Menu' : 'Paused';
   }
 
   onCommand(listener: (command: UiCommand) => void): void {
@@ -322,7 +483,7 @@ export class Ui {
       .map(
         (row) => /* html */ `
         <div class="row${row.isPlayer ? ' me' : ''}">
-          <span>${row.position}</span><span>${row.name}</span><span>${row.gap}</span>
+          <span>${row.position}</span><span>${esc(row.name)}</span><span>${row.gap}</span>
         </div>`,
       )
       .join('');
@@ -351,7 +512,7 @@ export class Ui {
         (row) => /* html */ `
         <tr class="${row.isPlayer ? 'me' : ''}">
           <td>${row.position}</td>
-          <td>${row.name}<div class="cls">${row.className}</div></td>
+          <td>${esc(row.name)}<div class="cls">${row.className}</div></td>
           <td>${row.time}<div class="cls">${row.note}</div></td>
         </tr>`,
       )

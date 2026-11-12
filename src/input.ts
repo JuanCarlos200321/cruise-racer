@@ -38,6 +38,8 @@ export class Input {
 
   constructor() {
     window.addEventListener('keydown', (event) => {
+      // Leave typing in text boxes alone.
+      if (event.target instanceof HTMLInputElement) return;
       if (event.code.startsWith('Arrow') || event.code === 'Space') event.preventDefault();
       if (event.repeat) return;
       this.held.add(event.code);
