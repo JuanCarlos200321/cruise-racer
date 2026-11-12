@@ -60,6 +60,8 @@ export interface LobbyView {
   isHost: boolean;
   /** The host has a race under way that this player is not in. */
   racing: boolean;
+  /** This player is connected through the relay rather than straight to the host. */
+  relayed: boolean;
 }
 
 const NAME_KEY = 'cruise-racer-name';
@@ -362,6 +364,7 @@ export class Ui {
     let note = '';
     if (view.racing) note = 'A race is under way. You will be in the next one.';
     else if (!view.isHost) note = 'Waiting for the host to start the race.';
+    if (view.relayed) note += ' Connected through the relay.';
     else if (view.players.length === 1) note = 'Waiting for friends to join. You can start whenever you like.';
     this.el('lobby-note').textContent = note;
   }

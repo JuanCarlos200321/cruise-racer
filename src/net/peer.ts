@@ -1,4 +1,5 @@
 import { Peer, type DataConnection } from 'peerjs';
+import { joinRelayRoom, openRelayRoom } from './relay';
 import type { Link } from './session';
 
 /** Room codes become PeerJS ids with this in front, so they do not clash with other apps. */
@@ -6,7 +7,8 @@ const PREFIX = 'cruise-racer-v1-';
 /** No letters or digits that are easily mistaken for each other. */
 const ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const CODE_LENGTH = 5;
-const CONNECT_TIMEOUT = 20000;
+/** How long to try a direct connection before falling back to the relay. */
+const DIRECT_TIMEOUT = 8000;
 
 export interface Room {
   code: string;
@@ -136,9 +138,27 @@ function linkOf(connection: DataConnection): Link {
   return link;
 }
 
-/** Open a room other players can join by its code. onLink is called for each player who connects. */
-export function openRoom(onLink: (link: Link) => void, attempt = 0): Promise<Room> {
-  if (LOCAL) return Promise.resolve(openLocalRoom(onLink));
+/**
+ * Open a room other players can join by its code. onLink is called for each
+ * player who connects. The room listens both for direct connections and on
+ * the relay, for players whose networks block direct ones.
+ */
+export async function openRoom(onLink: (link: Link) => void): Promise<Room> {
+  if (LOCAL) return openLocalRoom(onLink);
+  const direct = await openDirectRoom(onLink).catch(() => null);
+  const code = direct?.code ?? randomCode();
+  const relay = await openRelayRoom(code, onLink).catch(() => null);
+  if (!direct && !relay) throw new Error('Could not reach the matchmaking service or the relay. Check your connection and try again.');
+  return {
+    code,
+    close: () => {
+      direct?.close();
+      relay?.close();
+    },
+  };
+}
+
+function openDirectRoom(onLink: (link: Link) => void, attempt = 0): Promise<Room> {
   return new Promise((resolve, reject) => {
     const code = randomCode();
     const peer = new Peer(PREFIX + code);
@@ -157,28 +177,61 @@ export function openRoom(onLink: (link: Link) => void, attempt = 0): Promise<Roo
     peer.on('error', (error) => {
       if (opened) return;
       peer.destroy();
-      if (error.type === 'unavailable-id' && attempt < 3) openRoom(onLink, attempt + 1).then(resolve, reject);
-      else reject(new Error('Could not reach the matchmaking service. Check your connection and try again.'));
+      if (error.type === 'unavailable-id' && attempt < 3) openDirectRoom(onLink, attempt + 1).then(resolve, reject);
+      else reject(new Error('Could not reach the matchmaking service.'));
     });
   });
 }
 
-/** Connect to the host of a room. */
-export function joinRoom(code: string): Promise<{ link: Link; close(): void }> {
-  if (LOCAL) return joinLocalRoom(code);
+export interface Joined {
+  link: Link;
+  close(): void;
+  /** True when the game goes through the relay rather than straight to the host. */
+  relayed: boolean;
+}
+
+/**
+ * Connect to the host of a room: directly if the networks allow it, otherwise
+ * through the relay. onStatus is told when it falls back.
+ */
+export async function joinRoom(code: string, onStatus: (text: string) => void = () => {}): Promise<Joined> {
+  if (LOCAL) return { ...(await joinLocalRoom(code)), relayed: false };
+  let reason: DirectFailure;
+  try {
+    return { ...(await joinDirect(code)), relayed: false };
+  } catch (failure) {
+    reason = failure as DirectFailure;
+  }
+  onStatus('Trying the relay...');
+  const relay = await joinRelayRoom(code).catch(() => {
+    throw new Error(
+      reason === 'missing'
+        ? `There is no game with the code ${code}.`
+        : 'Could not connect to the host directly, and the relay could not be reached either.',
+    );
+  });
+  if (relay) return { ...relay, relayed: true };
+  throw new Error(
+    reason === 'blocked'
+      ? 'Could not connect to the host, directly or through the relay.'
+      : `There is no game with the code ${code}.`,
+  );
+}
+
+/** Why a direct connection failed: no such room, connection blocked, or matchmaking unreachable. */
+type DirectFailure = 'missing' | 'blocked' | 'service';
+
+function joinDirect(code: string): Promise<{ link: Link; close(): void }> {
   return new Promise((resolve, reject) => {
     const peer = new Peer();
     let settled = false;
-    const fail = (message: string): void => {
+    const fail = (reason: DirectFailure): void => {
       if (settled) return;
       settled = true;
       peer.destroy();
-      reject(new Error(message));
+      reject(reason);
     };
-    const timer = setTimeout(
-      () => fail('Could not connect to the host. One of your networks may be blocking direct connections.'),
-      CONNECT_TIMEOUT,
-    );
+    const timer = setTimeout(() => fail('blocked'), DIRECT_TIMEOUT);
     peer.on('open', () => {
       const connection = peer.connect(PREFIX + code, { reliable: true, serialization: 'json' });
       const link = linkOf(connection);
@@ -191,11 +244,7 @@ export function joinRoom(code: string): Promise<{ link: Link; close(): void }> {
     });
     peer.on('error', (error) => {
       clearTimeout(timer);
-      fail(
-        error.type === 'peer-unavailable'
-          ? `There is no game with the code ${code}.`
-          : 'Could not reach the matchmaking service. Check your connection and try again.',
-      );
+      fail(error.type === 'peer-unavailable' ? 'missing' : 'service');
     });
   });
 }

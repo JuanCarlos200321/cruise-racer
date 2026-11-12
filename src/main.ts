@@ -19,6 +19,8 @@ const RESULTS_DELAY = 3;
 const TAG_RANGE = 2600;
 /** Times a second the host sends the race to the other players, and they send their helm. */
 const NET_RATE = 30;
+/** How far behind the host a guest on the relay is shown, seconds. */
+const RELAY_DELAY = 0.25;
 /** How long the message about a hazard catching the player stays up, seconds. */
 const HIT_MESSAGE_SECONDS = 3;
 /** A hazard this close ahead is called out on the HUD, metres. */
@@ -74,7 +76,7 @@ type Net =
       /** Hazard hits not yet sent to the other players. */
       events: HazardEvent[];
     }
-  | { role: 'client'; code: string; session: ClientSession; close(): void; buffer: SnapshotBuffer };
+  | { role: 'client'; code: string; session: ClientSession; close(): void; buffer: SnapshotBuffer; relayed: boolean };
 let net: Net | null = null;
 /** True while the race on screen is one shared with other players. */
 let onlineRace = false;
@@ -187,6 +189,7 @@ function refreshLobby(): void {
     trackName: TRACKS[lobby.track]?.name ?? '',
     isHost: net.role === 'host',
     racing: lobby.racing && !onlineRace,
+    relayed: net.role === 'client' && net.relayed,
   });
 }
 
@@ -230,9 +233,10 @@ async function joinGame(): Promise<void> {
   connecting = true;
   ui.setOnlineStatus('Connecting...');
   try {
-    const room = await joinRoom(code);
+    const room = await joinRoom(code, (text) => ui.setOnlineStatus(text));
     const session = new ClientSession(room.link, ui.playerName, shipIndex);
-    const game: Net = { role: 'client', code, session, close: room.close, buffer: new SnapshotBuffer() };
+    const newBuffer = (): SnapshotBuffer => new SnapshotBuffer(room.relayed ? RELAY_DELAY : undefined);
+    const game: Net = { role: 'client', code, session, close: room.close, buffer: newBuffer(), relayed: room.relayed };
     net = game;
     session.onLobby = () => {
       const track = session.lobby!.track;
@@ -248,7 +252,7 @@ async function joinGame(): Promise<void> {
     };
     session.onStart = (track, entries) => {
       if (track < 0 || track >= tracks.length || session.id === null) return;
-      game.buffer = new SnapshotBuffer();
+      game.buffer = newBuffer();
       beginOnlineRace(track, entries, session.id);
     };
     session.onSnapshot = (snap) => {

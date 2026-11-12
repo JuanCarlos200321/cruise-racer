@@ -185,6 +185,9 @@ function applyBetween(race: Race, a: Snapshot, b: Snapshot, t: number): void {
 export class SnapshotBuffer {
   /** How far behind the newest snapshot the race is shown, seconds. */
   static readonly DELAY = 0.1;
+  /** A longer delay smooths out a connection that delivers unevenly, such as the relay. */
+  constructor(private readonly delay = SnapshotBuffer.DELAY) {}
+
   private snapshots: Snapshot[] = [];
   private events: HazardEvent[] = [];
   /** Smallest gap seen between this clock and the host's: the best guess at the true one. */
@@ -203,7 +206,7 @@ export class SnapshotBuffer {
   apply(race: Race, now: number): HazardEvent[] {
     const list = this.snapshots;
     if (list.length === 0) return [];
-    const at = now - this.offset - SnapshotBuffer.DELAY;
+    const at = now - this.offset - this.delay;
     while (list.length > 2 && list[1].at <= at) list.shift();
     const a = list[0];
     const b = list[1] ?? a;
