@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { CANNON_RANGE, type Hazard, type HazardEvent } from '../sim/hazards';
+import { CANNON_RANGE, WHALE_SLAP_AT, type Hazard } from '../sim/hazards';
 
 const SHARKS_IN_SHOAL = 6;
 const SHARK_LENGTH = 72;
@@ -7,8 +7,8 @@ const TENTACLES = 8;
 const TENTACLE_SEGMENTS = 9;
 const TENTACLE_SEGMENT_LENGTH = 15;
 const WAVE_HEIGHT = 40;
-const SPLASHES = 10;
-const SPLASH_SECONDS = 1.6;
+/** Long enough to put the flukes where the simulation has the tail come down. */
+const WHALE_LENGTH = 150;
 
 /** A flat disc of churned water marking where a hazard is. */
 function waterDisc(radius: number, color: string, opacity: number): THREE.Mesh {
@@ -387,23 +387,120 @@ function createWave(halfLength: number): THREE.Mesh {
   return wave;
 }
 
+/**
+ * A humpback, nose along +Z, scaled up like everything else out here. pose()
+ * takes it through its routine: it blows, lifts its tail and brings it down.
+ */
+function createWhale(): { group: THREE.Group; pose(cycle: number): void } {
+  const group = new THREE.Group();
+  const L = WHALE_LENGTH;
+  const skin = new THREE.MeshStandardMaterial({ color: '#2b3a4a', roughness: 0.35, metalness: 0.05 });
+  const pale = new THREE.MeshStandardMaterial({ color: '#c9d3da', roughness: 0.6 });
+
+  // The body runs from the nose to where the tail stock begins.
+  const profile = [
+    [0, -0.5],
+    [0.06, -0.47],
+    [0.105, -0.36],
+    [0.125, -0.2],
+    [0.125, 0],
+    [0.105, 0.14],
+    [0.07, 0.24],
+  ].map(([r, y]) => new THREE.Vector2(r * L, -y * L));
+  const body = new THREE.Mesh(new THREE.LatheGeometry(profile, 20), skin);
+  body.rotation.x = Math.PI / 2;
+  body.scale.set(1.1, 1, 0.9);
+  body.position.y = -5;
+  group.add(body);
+  const hump = new THREE.Mesh(new THREE.SphereGeometry(4, 12, 8), skin);
+  hump.scale.set(0.5, 1, 2.2);
+  hump.position.set(0, 7.5, -0.12 * L);
+  group.add(hump);
+  for (const side of [-1, 1]) {
+    const flipper = new THREE.Mesh(new THREE.SphereGeometry(1, 12, 8), pale);
+    flipper.scale.set(20, 1.6, 6);
+    flipper.position.set(side * 24, -3, 0.16 * L);
+    flipper.rotation.set(0, side * 0.5, side * -0.25);
+    group.add(flipper);
+  }
+
+  // The tail hinges where the body ends.
+  const tail = new THREE.Group();
+  tail.position.set(0, -5, -0.24 * L);
+  const stock = new THREE.Mesh(new THREE.CylinderGeometry(2.6, 0.07 * L * 1.05, 0.3 * L, 14), skin);
+  stock.rotation.x = -Math.PI / 2;
+  stock.position.z = -0.15 * L;
+  stock.scale.set(1.1, 1, 0.9);
+  const fluke = new THREE.Shape();
+  fluke.moveTo(0, 6);
+  fluke.bezierCurveTo(10, 4, 24, -4, 30, -14);
+  fluke.bezierCurveTo(20, -10, 8, -9, 0, -5);
+  fluke.bezierCurveTo(-8, -9, -20, -10, -30, -14);
+  fluke.bezierCurveTo(-24, -4, -10, 4, 0, 6);
+  const flukeGeometry = new THREE.ExtrudeGeometry(fluke, { depth: 2.2, bevelEnabled: false });
+  // Drawn in (x, y) with the tips towards -y: lay it flat with the tips trailing.
+  flukeGeometry.rotateX(Math.PI / 2);
+  const flukes = new THREE.Mesh(flukeGeometry, skin);
+  flukes.position.set(0, 1.1, -0.3 * L);
+  tail.add(stock, flukes);
+  group.add(tail);
+
+  // The blow: a column of spray with a cloud of mist on top.
+  const blowMaterial = new THREE.MeshBasicMaterial({ color: '#ffffff', transparent: true, opacity: 0, depthWrite: false, side: THREE.DoubleSide });
+  const mistMaterial = blowMaterial.clone();
+  const columnGeometry = new THREE.ConeGeometry(1, 1, 14, 1, true);
+  columnGeometry.rotateX(Math.PI);
+  columnGeometry.translate(0, 0.5, 0);
+  const column = new THREE.Mesh(columnGeometry, blowMaterial);
+  const mist = new THREE.Mesh(new THREE.IcosahedronGeometry(1, 2), mistMaterial);
+  const blowhole = new THREE.Group();
+  blowhole.position.set(0, 8, 0.2 * L);
+  blowhole.rotation.x = -0.2;
+  blowhole.add(column, mist);
+  group.add(blowhole);
+
+  group.traverse((object) => {
+    if (object !== column && object !== mist) object.castShadow = true;
+  });
+
+  const smooth = (t: number): number => t * t * (3 - 2 * t);
+  return {
+    group,
+    pose(cycle) {
+      // Blow early in the routine.
+      const blow = Math.max(0, Math.min(1, (cycle - 0.05) / 0.3));
+      const blowing = cycle > 0.05 && cycle < 0.35;
+      column.visible = blowing;
+      mist.visible = blowing;
+      const height = 120 * Math.sin(Math.min(1, blow * 2.2) * Math.PI * 0.5);
+      column.scale.set(7 + blow * 16, Math.max(0.01, height), 7 + blow * 16);
+      blowMaterial.opacity = 0.75 * (1 - blow * blow);
+      mist.position.y = height;
+      mist.scale.setScalar(12 + blow * 34);
+      mistMaterial.opacity = 0.6 * (1 - blow);
+
+      // Then the tail comes up out of the water, hangs, and comes down hard.
+      const rise = WHALE_SLAP_AT - 0.32;
+      const hang = WHALE_SLAP_AT - 0.06;
+      let lift = 0;
+      if (cycle >= rise && cycle < hang) lift = smooth((cycle - rise) / (hang - rise));
+      else if (cycle >= hang && cycle < WHALE_SLAP_AT) lift = 1 - ((cycle - hang) / (WHALE_SLAP_AT - hang)) ** 2;
+      tail.rotation.x = -0.28 + lift * 1.3;
+      // The body pitches forward as the tail lifts.
+      body.rotation.x = Math.PI / 2 + lift * 0.1;
+    },
+  };
+}
+
 interface View {
   root: THREE.Object3D;
   update(hazard: Hazard, now: number): void;
 }
 
-interface Splash {
-  mesh: THREE.Mesh;
-  age: number;
-  size: number;
-}
-
-/** Draws the hazards of a race and the splashes when one catches a ship. */
+/** Draws the hazards of a race. */
 export class HazardViews {
   readonly group = new THREE.Group();
   private readonly views: View[] = [];
-  private readonly splashes: Splash[] = [];
-  private nextSplash = 0;
 
   constructor(hazards: Hazard[]) {
     const sharkSkin = new THREE.MeshStandardMaterial({ color: '#56636f', roughness: 0.5 });
@@ -412,20 +509,6 @@ export class HazardViews {
       this.views.push(view);
       this.group.add(view.root);
       view.update(hazard, 0);
-    }
-
-    const splashGeometry = new THREE.ConeGeometry(1, 2.2, 12, 1, true);
-    // Point in the water, opening upwards.
-    splashGeometry.rotateX(Math.PI);
-    splashGeometry.translate(0, 1.1, 0);
-    for (let i = 0; i < SPLASHES; i++) {
-      const mesh = new THREE.Mesh(
-        splashGeometry,
-        new THREE.MeshBasicMaterial({ color: '#ffffff', transparent: true, opacity: 0, depthWrite: false, side: THREE.DoubleSide }),
-      );
-      mesh.visible = false;
-      this.group.add(mesh);
-      this.splashes.push({ mesh, age: SPLASH_SECONDS, size: 1 });
     }
   }
 
@@ -489,6 +572,24 @@ export class HazardViews {
       };
     }
 
+    if (hazard.kind === 'whale') {
+      const whale = createWhale();
+      root.add(whale.group);
+      const ring = waterDisc(hazard.r, '#ff5a4f', 0.55);
+      root.add(ring);
+      return {
+        root,
+        update(h, now) {
+          place(h);
+          // Under the surface while it turns round at the edge of the channel.
+          root.visible = h.strength > 0.02;
+          whale.group.position.y = -(1 - h.strength) * 34 + Math.sin(now * 0.8) * 1.2;
+          ring.visible = h.strength > 0.5;
+          whale.pose(h.cycle);
+        },
+      };
+    }
+
     const ship = createPirateShip();
     root.add(ship);
     // The ring shows how far its guns reach. It stays level while the ship rolls.
@@ -508,27 +609,7 @@ export class HazardViews {
     };
   }
 
-  /** Throw up water where a hazard has caught a ship. */
-  burst(event: HazardEvent): void {
-    const size = event.kind === 'wave' ? 70 : event.kind === 'kraken' ? 60 : event.kind === 'pirate' ? 45 : 30;
-    const splash = this.splashes[this.nextSplash];
-    this.nextSplash = (this.nextSplash + 1) % this.splashes.length;
-    splash.age = 0;
-    splash.size = size;
-    splash.mesh.position.set(event.x, 0, event.z);
-    splash.mesh.visible = true;
-  }
-
-  update(hazards: Hazard[], now: number, dt: number): void {
+  update(hazards: Hazard[], now: number): void {
     hazards.forEach((hazard, i) => this.views[i].update(hazard, now));
-    for (const splash of this.splashes) {
-      if (splash.age >= SPLASH_SECONDS) continue;
-      splash.age += dt;
-      const t = Math.min(1, splash.age / SPLASH_SECONDS);
-      const rise = Math.sin(Math.min(1, t * 1.6) * Math.PI * 0.5);
-      splash.mesh.scale.set(splash.size * (0.35 + t * 0.5), splash.size * rise * 0.9, splash.size * (0.35 + t * 0.5));
-      (splash.mesh.material as THREE.MeshBasicMaterial).opacity = 0.85 * (1 - t) ** 1.5;
-      splash.mesh.visible = t < 1;
-    }
   }
 }

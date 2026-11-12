@@ -3,7 +3,7 @@ import { joinRelayRoom, openRelayRoom } from './relay';
 import type { Link } from './session';
 
 /** Room codes become PeerJS ids with this in front, so they do not clash with other apps. */
-const PREFIX = 'cruise-racer-v1-';
+const PREFIX = 'cruise-racer-v2-';
 /** No letters or digits that are easily mistaken for each other. */
 const ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const CODE_LENGTH = 5;

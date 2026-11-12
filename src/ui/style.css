@@ -759,3 +759,52 @@ input:focus {
 .guest [data-cmd='restart'] {
   display: none;
 }
+
+/* The hull gauge fills from the left and has no centre mark. */
+.gauge.hull::after {
+  display: none;
+}
+
+.gauge.hull i {
+  left: 0;
+  background: #4fd67a;
+  transition: width 0.2s;
+}
+
+.gauge.hull i.damaged {
+  background: #ffb020;
+}
+
+.gauge.hull i.critical {
+  background: #e3262c;
+}
+
+#hud-item {
+  right: 310px;
+  bottom: 56px;
+  width: 230px;
+  border-left: 5px solid #ffd23f;
+}
+
+#hud-item .name {
+  font-size: 20px;
+  font-style: italic;
+  font-weight: 800;
+  line-height: 1.2;
+}
+
+#hud-item .hint,
+#hud-item .active {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+#hud-item .active {
+  color: var(--cyan);
+  font-weight: 700;
+  min-height: 16px;
+}
+
+#hud-item.empty .name {
+  color: var(--muted);
+}

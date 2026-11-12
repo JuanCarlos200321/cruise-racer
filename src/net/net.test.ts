@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { Race } from '../sim/race';
 import { createRng } from '../sim/rng';
+import { SHIP_CLASSES } from '../sim/ships';
 import { Track, TRACKS } from '../sim/track';
 import { cleanHelm, cleanName, entriesFor, HOST_ID, MAX_PLAYERS, SnapshotBuffer, takeSnapshot } from './protocol';
 import { ClientSession, HostSession, type Link } from './session';
@@ -221,11 +222,54 @@ describe('a race over the network', () => {
       expect(Math.abs(r.trackIndex - hostRace.racers[i].trackIndex)).toBeLessThanOrEqual(1);
       expect(r.hazardHits).toBe(hostRace.racers[i].hazardHits);
     });
-    const wave = hostRace.hazards!.hazards.findIndex((h) => h.kind === 'wave');
-    const hostWave = hostRace.hazards!.hazards[wave];
-    const mirrorWave = mirror.hazards!.hazards[wave];
-    expect(Math.hypot(hostWave.x - mirrorWave.x, hostWave.z - mirrorWave.z)).toBeLessThan(10);
-    expect(hits).toBe(hostRace.racers.reduce((sum, r) => sum + r.hazardHits, 0));
+    const whale = hostRace.hazards!.hazards.findIndex((h) => h.kind === 'whale');
+    const hostWhale = hostRace.hazards!.hazards[whale];
+    const mirrorWhale = mirror.hazards!.hazards[whale];
+    expect(Math.hypot(hostWhale.x - mirrorWhale.x, hostWhale.z - mirrorWhale.z)).toBeLessThan(10);
+    expect(mirrorWhale.cycle).toBeCloseTo(hostWhale.cycle, 1);
+    expect(hits).toBeGreaterThan(0);
+  });
+
+  it('shows a joining player damage, power-ups, and what is in the water', () => {
+    const track = new Track(TRACKS[0]);
+    const entries = [0, 1].map((i) => ({ cls: SHIP_CLASSES[i], name: `Ship ${i}`, isPlayer: i === 0, pace: 0.95 }));
+    const hostRace = new Race(track, entries);
+    const mirror = new Race(track, entries);
+    for (let i = 0; i < 6 * 60; i++) hostRace.step(DT, { throttle: 0, rudder: 0 });
+    const [a, b] = hostRace.racers;
+    a.hull = 0.4;
+    a.shield = 5;
+    a.boost = 2;
+    a.item = 'cork';
+    b.item = 'coconut';
+    hostRace.useItem(b);
+    hostRace.items!.boxes[3].ready = false;
+    hostRace.items!.shots.push({ x: 10, z: 20, heading: 1, owner: 0, life: 3 });
+
+    const buffer = new SnapshotBuffer();
+    buffer.push(JSON.parse(JSON.stringify(takeSnapshot(hostRace, 1, []))), 1);
+    buffer.push(JSON.parse(JSON.stringify(takeSnapshot(hostRace, 1.1, []))), 1.1);
+    buffer.apply(mirror, 1.1 + SnapshotBuffer.DELAY);
+
+    expect(mirror.racers[0].hull).toBeCloseTo(0.4);
+    expect(mirror.racers[0].shield).toBeCloseTo(5);
+    expect(mirror.racers[0].boost).toBeCloseTo(2);
+    expect(mirror.racers[0].item).toBe('cork');
+    expect(mirror.racers[1].item).toBeNull();
+    expect(mirror.items!.boxes.map((box) => box.ready)).toEqual(hostRace.items!.boxes.map((box) => box.ready));
+    expect(mirror.items!.boxes[3].ready).toBe(false);
+    expect(mirror.items!.drops).toHaveLength(3);
+    expect(mirror.items!.shots).toHaveLength(1);
+    expect(mirror.items!.shots[0].x).toBeCloseTo(10);
+  });
+
+  it('lets a player ask the host to use their power-up', () => {
+    const host = new HostSession('Ana', 0, 0, createRng(3));
+    const ben = join(host, 'Ben', 3);
+    const used: string[] = [];
+    host.onUse = (id) => used.push(id);
+    ben.sendUse();
+    expect(used).toEqual([ben.id]);
   });
 
   it('ignores snapshots that arrive out of order', () => {

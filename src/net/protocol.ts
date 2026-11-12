@@ -1,4 +1,5 @@
-import type { HazardEvent } from '../sim/hazards';
+import type { RaceEvent } from '../sim/events';
+import { ITEM_KINDS } from '../sim/items';
 import type { Helm } from '../sim/physics';
 import type { Race, RaceEntry, RacePhase } from '../sim/race';
 import { SHIP_CLASSES } from '../sim/ships';
@@ -41,10 +42,12 @@ export interface Snapshot {
   time: number;
   /** Per racer: see SHIP_FIELDS. */
   ships: number[][];
-  /** Per hazard: x, z, heading, strength, index, lateral. */
+  /** Per hazard: x, z, heading, strength, index, lateral, cycle. */
   hazards: number[][];
-  /** Hazard hits since the last snapshot. */
-  events: HazardEvent[];
+  /** Power-ups: which boxes are there (1 or 0), corks as x, z, heading, and coconuts as x, z. */
+  items: { boxes: number[]; shots: number[][]; drops: number[][] };
+  /** What has happened since the last snapshot. */
+  events: RaceEvent[];
 }
 
 export type HostMessage =
@@ -58,7 +61,8 @@ export type ClientMessage =
   | { t: 'hello'; name: string; ship: number }
   | { t: 'ship'; ship: number }
   | { t: 'helm'; throttle: number; rudder: number }
-  | { t: 'reset' };
+  | { t: 'reset' }
+  | { t: 'use' };
 
 /** A player's name made safe to show: trimmed, shortened, never empty. */
 export function cleanName(value: unknown): string {
@@ -92,7 +96,7 @@ export function entriesFor(specs: EntrySpec[], me: string): RaceEntry[] {
 
 const round = (value: number): number => Math.round(value * 1000) / 1000;
 
-export function takeSnapshot(race: Race, at: number, events: HazardEvent[]): Snapshot {
+export function takeSnapshot(race: Race, at: number, events: RaceEvent[]): Snapshot {
   return {
     at: round(at),
     phase: race.phase,
@@ -117,6 +121,11 @@ export function takeSnapshot(race: Race, at: number, events: HazardEvent[]): Sna
         r.offCourse ? 1 : 0,
         r.drafting ? 1 : 0,
         r.hazardHits,
+        round(r.hull),
+        round(r.sinking),
+        r.item ? ITEM_KINDS.indexOf(r.item) : -1,
+        round(r.boost),
+        round(r.shield),
       ];
     }),
     hazards: (race.hazards?.hazards ?? []).map((h) => [
@@ -126,7 +135,13 @@ export function takeSnapshot(race: Race, at: number, events: HazardEvent[]): Sna
       round(h.strength),
       h.index,
       round(h.lateral),
+      round(h.cycle),
     ]),
+    items: {
+      boxes: (race.items?.boxes ?? []).map((box) => (box.ready ? 1 : 0)),
+      shots: (race.items?.shots ?? []).map((shot) => [round(shot.x), round(shot.z), round(shot.heading)]),
+      drops: (race.items?.drops ?? []).map((drop) => [round(drop.x), round(drop.z)]),
+    },
     events,
   };
 }
@@ -161,6 +176,11 @@ function applyBetween(race: Race, a: Snapshot, b: Snapshot, t: number): void {
     racer.offCourse = q[13] === 1;
     racer.drafting = q[14] === 1;
     racer.hazardHits = q[15];
+    racer.hull = lerp(p[16], q[16], t);
+    racer.sinking = q[17];
+    racer.item = ITEM_KINDS[q[18]] ?? null;
+    racer.boost = q[19];
+    racer.shield = q[20];
   });
   (race.hazards?.hazards ?? []).forEach((hazard, i) => {
     const p = a.hazards[i];
@@ -175,7 +195,14 @@ function applyBetween(race: Race, a: Snapshot, b: Snapshot, t: number): void {
     hazard.strength = lerp(p[3], q[3], k);
     hazard.index = race.track.clampIndex(q[4]);
     hazard.lateral = q[5];
+    hazard.cycle = q[6];
   });
+  const items = race.items;
+  if (items && b.items) {
+    items.boxes.forEach((box, i) => (box.ready = b.items.boxes[i] !== 0));
+    items.shots = b.items.shots.map(([x, z, heading]) => ({ x, z, heading, owner: -1, life: 1 }));
+    items.drops = b.items.drops.map(([x, z]) => ({ x, z, owner: -1, age: 0 }));
+  }
 }
 
 /**
@@ -189,7 +216,7 @@ export class SnapshotBuffer {
   constructor(private readonly delay = SnapshotBuffer.DELAY) {}
 
   private snapshots: Snapshot[] = [];
-  private events: HazardEvent[] = [];
+  private events: RaceEvent[] = [];
   /** Smallest gap seen between this clock and the host's: the best guess at the true one. */
   private offset = Infinity;
 
@@ -203,7 +230,7 @@ export class SnapshotBuffer {
   }
 
   /** Bring the race up to date. Returns hazard hits not yet reported. */
-  apply(race: Race, now: number): HazardEvent[] {
+  apply(race: Race, now: number): RaceEvent[] {
     const list = this.snapshots;
     if (list.length === 0) return [];
     const at = now - this.offset - this.delay;

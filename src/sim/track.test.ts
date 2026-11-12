@@ -85,6 +85,6 @@ describe.each(TRACKS)('route $id', (def) => {
   });
 
   it('meets every kind of hazard on the way', () => {
-    expect(new Set(def.hazards).size).toBe(4);
+    expect(new Set(def.hazards).size).toBe(5);
   });
 });

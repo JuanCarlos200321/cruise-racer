@@ -8,7 +8,7 @@ import type { Link } from './session';
  * just as anyone with the code can join the game.
  */
 const BROKERS = ['wss://broker.emqx.io:8084/mqtt', 'wss://broker.hivemq.com:8884/mqtt'];
-const TOPIC = 'cruise-racer-v1';
+const TOPIC = 'cruise-racer-v2';
 const CONNECT_TIMEOUT = 6000;
 /** How long a joining player waits for the host to answer on one broker. */
 const ANSWER_TIMEOUT = 4000;

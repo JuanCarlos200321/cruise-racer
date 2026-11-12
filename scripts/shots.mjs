@@ -90,8 +90,9 @@ for (const name of names) {
   page.on('pageerror', (error) => console.log(`[${name}] PAGE ERROR ${error.message}`));
   if (name.startsWith('hazard:')) {
     // hazard:<route>:<n>[:<gap metres>[:<ship>[:<camera>]]] races up to the nth hazard on a route.
-    const [, route, n, gap = '500', ship = 'quantum', cam = 'chase'] = name.split(':');
-    await page.goto(`${BASE}?demo=${route}&ship=${ship}&near=${n}&gap=${gap}&cam=${cam}&solo`);
+    // A seventh part is added to the address as it is, e.g. hold&cycle=0.2
+    const [, route, n, gap = '500', ship = 'quantum', cam = 'chase', extra = ''] = name.split(':');
+    await page.goto(`${BASE}?demo=${route}&ship=${ship}&near=${n}&gap=${gap}&cam=${cam}&solo&${extra}`);
     await wait(3500);
   } else if (name.startsWith('inspect:')) {
     // inspect:<class>:<angle>:<dist>:<height>[:track]

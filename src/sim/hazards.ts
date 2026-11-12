@@ -1,4 +1,5 @@
 import { hullCircles } from './collision';
+import { absorb, hurt, type EventKind, type RaceEvent } from './events';
 import { forward, starboard, type ShipState } from './physics';
 import { createRng } from './rng';
 import type { ShipClass } from './ships';
@@ -17,8 +18,10 @@ export interface Hazard {
   /** Position on the route: centreline sample and distance to starboard of it. */
   index: number;
   lateral: number;
-  /** 0..1. Waves build up and die away; everything else is always 1. */
+  /** 0..1. Waves build up and die away, whales dive; everything else is always 1. */
   strength: number;
+  /** 0..1 through a whale's routine of blowing and slapping its tail. 0 for everything else. */
+  cycle: number;
 }
 
 /** A ship the hazards can act on. */
@@ -26,19 +29,10 @@ export interface HazardTarget {
   id: number;
   state: ShipState;
   cls: ShipClass;
-}
-
-export interface HazardEvent {
-  kind: HazardKind;
-  shipId: number;
-  /** Where it happened. */
-  x: number;
-  z: number;
-  /** Where it came from. */
-  fromX: number;
-  fromZ: number;
-  /** True for the worst outcome: a wave taken at speed or on the beam. */
-  heavy: boolean;
+  /** Seconds of shield left. A shield takes one hit and is gone. */
+  shield: number;
+  /** 1 (sound) to 0 (sinking). */
+  hull: number;
 }
 
 export const HAZARD_NAMES: Record<HazardKind, string> = {
@@ -46,6 +40,7 @@ export const HAZARD_NAMES: Record<HazardKind, string> = {
   kraken: 'Kraken',
   wave: 'Rogue wave',
   pirate: 'Pirate ship',
+  whale: 'Whale crossing',
 };
 
 /** Share of the route, from the start line, before the first hazard and after the last. */
@@ -55,8 +50,10 @@ const LAST_AT = 0.93;
 /** Sharks hold a ship to this share of its top speed. */
 const SHARK_SPEED_CAP = 0.4;
 const SHARK_PATROL_RATE = 0.1; // rad/s
+const SHARK_DAMAGE = 0.04;
 const KRAKEN_HOLD = 3.5;
 const KRAKEN_RELEASE = 20;
+const KRAKEN_DAMAGE = 0.12;
 const WAVE_SPEED = 24;
 /** A wave runs this far either side of where it is centred, metres. */
 const WAVE_RUN = 900;
@@ -65,7 +62,8 @@ const WAVE_THICKNESS = 34;
 const WAVE_COOLDOWN = 6;
 /** Above this share of top speed a wave slams the ship even bow-on. */
 const WAVE_SAFE_SPEED = 0.6;
-const WAVE_SHOVE = 16;
+const WAVE_SHOVE = 24;
+const WAVE_DAMAGE = 0.12;
 const PIRATE_SPEED = 13;
 export const PIRATE_HULL_RADIUS = 46;
 export const CANNON_RANGE = 260;
@@ -75,6 +73,21 @@ const CANNON_COOLDOWN = 25;
 /** Radius of the circle the galleon sails round, as a share of the channel half-width. */
 const PIRATE_CIRCLE = 0.25;
 const CANNON_SPEED_KEPT = 0.72;
+const CANNON_DAMAGE = 0.1;
+const WHALE_SPEED = 16;
+/** How far across the channel a whale swims before it dives and turns, as a share of the half-width. */
+const WHALE_REACH = 0.85;
+const WHALE_DIVE = 140;
+/** Seconds for one round of blowing, raising the tail and bringing it down. */
+export const WHALE_ROUTINE = 8;
+/** Point in the routine at which the tail hits the water. */
+export const WHALE_SLAP_AT = 0.8;
+/** The tail is this far behind the middle of the whale, as a share of its radius. */
+export const WHALE_TAIL = 0.9;
+const WHALE_SPLASH_RADIUS = 95;
+const WHALE_COOLDOWN = 6;
+const WHALE_DAMAGE = 0.15;
+const WHALE_SPLASH_DAMAGE = 0.04;
 
 interface Live extends Hazard {
   home: number;
@@ -84,7 +97,7 @@ interface Live extends Hazard {
   cooldown: Map<number, number>;
   held: Map<number, number>;
   inside: Set<number>;
-  /** Wave: metres along the route, the side it is on, and its half-length. Pirate: reload timer. */
+  /** Wave: metres along the route. Wave and whale: the side it is on or heading for. Pirate: reload timer. */
   along: number;
   side: number;
   reload: number;
@@ -118,12 +131,16 @@ export class HazardField {
       } else if (kind === 'wave') {
         homeLateral = 0.42 * hw;
         r = 0.55 * hw;
+      } else if (kind === 'whale') {
+        homeLateral = (rng() - 0.5) * hw;
+        r = 90;
       } else {
         // Off to one side, so the far side of the channel is out of range of its guns.
         homeLateral = side * (0.3 + rng() * 0.2) * hw;
         r = CANNON_RANGE;
       }
       const p = track.pointAt(home, homeLateral);
+      const phase = rng() * Math.PI * 2;
       this.live.push({
         id: i,
         kind,
@@ -134,9 +151,10 @@ export class HazardField {
         index: home,
         lateral: homeLateral,
         strength: 1,
+        cycle: kind === 'whale' ? phase / (Math.PI * 2) : 0,
         home,
         homeLateral,
-        phase: rng() * Math.PI * 2,
+        phase,
         cooldown: new Map(),
         held: new Map(),
         inside: new Set(),
@@ -162,20 +180,21 @@ export class HazardField {
   }
 
   /** Move every hazard on by dt and apply them to the ships. Returns what happened. */
-  step(dt: number, ships: HazardTarget[]): HazardEvent[] {
+  step(dt: number, ships: HazardTarget[]): RaceEvent[] {
     this.time += dt;
-    const events: HazardEvent[] = [];
+    const events: RaceEvent[] = [];
     for (const h of this.live) {
       for (const [id, left] of h.cooldown) h.cooldown.set(id, left - dt);
       if (h.kind === 'sharks') this.stepSharks(h, dt, ships, events);
       else if (h.kind === 'kraken') this.stepKraken(h, dt, ships, events);
       else if (h.kind === 'wave') this.stepWave(h, dt, ships, events);
+      else if (h.kind === 'whale') this.stepWhale(h, dt, ships, events);
       else this.stepPirate(h, dt, ships, events);
     }
     return events;
   }
 
-  private stepSharks(h: Live, dt: number, ships: HazardTarget[], events: HazardEvent[]): void {
+  private stepSharks(h: Live, dt: number, ships: HazardTarget[], events: RaceEvent[]): void {
     const track = this.track;
     h.lateral = h.homeLateral + Math.sin(this.time * SHARK_PATROL_RATE + h.phase) * 0.3 * track.halfWidth;
     const p = track.pointAt(h.home, h.lateral);
@@ -186,17 +205,20 @@ export class HazardField {
         h.inside.delete(ship.id);
         continue;
       }
+      // Sharks keep clear of a shielded ship, and the shield is not used up.
+      if (ship.shield > 0) continue;
       const s = ship.state;
       const cap = ship.cls.topSpeed * SHARK_SPEED_CAP;
       if (s.u > cap) s.u -= (s.u - cap) * Math.min(1, 2.5 * dt);
       if (!h.inside.has(ship.id)) {
         h.inside.add(ship.id);
+        hurt(ship, SHARK_DAMAGE);
         events.push(event(h, ship, false));
       }
     }
   }
 
-  private stepKraken(h: Live, dt: number, ships: HazardTarget[], events: HazardEvent[]): void {
+  private stepKraken(h: Live, dt: number, ships: HazardTarget[], events: RaceEvent[]): void {
     for (const ship of ships) {
       const s = ship.state;
       const held = h.held.get(ship.id) ?? 0;
@@ -208,13 +230,19 @@ export class HazardField {
         h.held.set(ship.id, held - dt);
         if (held - dt <= 0) h.cooldown.set(ship.id, KRAKEN_RELEASE);
       } else if ((h.cooldown.get(ship.id) ?? 0) <= 0 && touches(ship, h.x, h.z, h.r * 0.75)) {
-        h.held.set(ship.id, KRAKEN_HOLD);
-        events.push(event(h, ship, true));
+        if (absorb(ship)) {
+          h.cooldown.set(ship.id, KRAKEN_RELEASE);
+          events.push(event(h, ship, false, 'blocked'));
+        } else {
+          h.held.set(ship.id, KRAKEN_HOLD);
+          hurt(ship, KRAKEN_DAMAGE);
+          events.push(event(h, ship, true));
+        }
       }
     }
   }
 
-  private stepWave(h: Live, dt: number, ships: HazardTarget[], events: HazardEvent[]): void {
+  private stepWave(h: Live, dt: number, ships: HazardTarget[], events: RaceEvent[]): void {
     const track = this.track;
     const centre = h.home * track.spacing;
     const top = Math.min(centre + WAVE_RUN, track.finishIndex * track.spacing);
@@ -242,11 +270,15 @@ export class HazardField {
       const dz = s.z - h.z;
       const along = dx * t.x + dz * t.z;
       const across = dx * -t.z + dz * t.x;
-      const f = forward(s.heading);
-      const bowOn = Math.abs(f.x * t.x + f.z * t.z);
       if (Math.abs(along) > WAVE_THICKNESS || Math.abs(across) > h.r) continue;
 
       h.cooldown.set(ship.id, WAVE_COOLDOWN);
+      if (absorb(ship)) {
+        events.push(event(h, ship, false, 'blocked'));
+        continue;
+      }
+      const f = forward(s.heading);
+      const bowOn = Math.abs(f.x * t.x + f.z * t.z);
       const fast = Math.abs(s.u) > ship.cls.topSpeed * WAVE_SAFE_SPEED;
       const heavy = fast || bowOn < 0.85;
       if (heavy) {
@@ -256,6 +288,7 @@ export class HazardField {
         s.u += -WAVE_SHOVE * (t.x * f.x + t.z * f.z);
         s.v += -WAVE_SHOVE * (t.x * sb.x + t.z * sb.z);
         s.r += (bowOn < 0.85 ? 0.12 : 0.04) * Math.sign(across || 1);
+        hurt(ship, WAVE_DAMAGE);
       } else {
         s.u *= 0.92;
       }
@@ -263,7 +296,7 @@ export class HazardField {
     }
   }
 
-  private stepPirate(h: Live, dt: number, ships: HazardTarget[], events: HazardEvent[]): void {
+  private stepPirate(h: Live, dt: number, ships: HazardTarget[], events: RaceEvent[]): void {
     const track = this.track;
     // The galleon sails round in a circle on its side of the channel.
     const radius = PIRATE_CIRCLE * track.halfWidth;
@@ -293,10 +326,69 @@ export class HazardField {
       }
     }
     if (!target) return;
-    target.state.u *= CANNON_SPEED_KEPT;
     h.cooldown.set(target.id, CANNON_COOLDOWN);
     h.reload = CANNON_RELOAD;
+    if (absorb(target)) {
+      events.push(event(h, target, false, 'blocked'));
+      return;
+    }
+    target.state.u *= CANNON_SPEED_KEPT;
+    hurt(target, CANNON_DAMAGE);
     events.push(event(h, target, false));
+  }
+
+  private stepWhale(h: Live, dt: number, ships: HazardTarget[], events: RaceEvent[]): void {
+    const track = this.track;
+    // The whale swims across the channel, dives at the edge and comes back the other way.
+    const reach = WHALE_REACH * track.halfWidth;
+    h.lateral += h.side * WHALE_SPEED * dt;
+    if (Math.abs(h.lateral) >= reach) {
+      h.lateral = Math.sign(h.lateral) * reach;
+      h.side = -Math.sign(h.lateral);
+    }
+    h.strength = Math.max(0, Math.min(1, (reach - Math.abs(h.lateral)) / WHALE_DIVE));
+    const p = track.pointAt(h.home, h.lateral);
+    const t = track.tangents[h.home];
+    const dirX = -t.z * h.side;
+    const dirZ = t.x * h.side;
+    h.x = p.x;
+    h.z = p.z;
+    h.heading = Math.atan2(dirX, dirZ);
+
+    const before = h.cycle;
+    h.cycle = (h.cycle + dt / WHALE_ROUTINE) % 1;
+    if (h.strength < 0.5) return;
+
+    if (before < WHALE_SLAP_AT && h.cycle >= WHALE_SLAP_AT) {
+      const tailX = h.x - dirX * h.r * WHALE_TAIL;
+      const tailZ = h.z - dirZ * h.r * WHALE_TAIL;
+      events.push({ kind: 'splash', shipId: -1, x: tailX, z: tailZ, fromX: h.x, fromZ: h.z, heavy: true });
+      for (const ship of ships) {
+        if ((h.cooldown.get(ship.id) ?? 0) > 0 || !touches(ship, tailX, tailZ, WHALE_SPLASH_RADIUS)) continue;
+        h.cooldown.set(ship.id, WHALE_COOLDOWN);
+        if (absorb(ship)) {
+          events.push(event(h, ship, false, 'blocked'));
+          continue;
+        }
+        ship.state.u *= 0.75;
+        hurt(ship, WHALE_SPLASH_DAMAGE);
+        events.push(event(h, ship, false));
+      }
+    }
+
+    for (const ship of ships) {
+      if ((h.cooldown.get(ship.id) ?? 0) > 0 || !touches(ship, h.x, h.z, h.r * 0.6)) continue;
+      h.cooldown.set(ship.id, WHALE_COOLDOWN);
+      if (absorb(ship)) {
+        events.push(event(h, ship, false, 'blocked'));
+        continue;
+      }
+      const s = ship.state;
+      s.u *= 0.4;
+      s.r += 0.1 * h.side;
+      hurt(ship, WHALE_DAMAGE);
+      events.push(event(h, ship, true));
+    }
   }
 }
 
@@ -305,9 +397,9 @@ function touches(ship: HazardTarget, x: number, z: number, r: number): boolean {
   return hullCircles(ship.state, ship.cls).some((c) => Math.hypot(c.x - x, c.z - z) < c.r + r);
 }
 
-function event(h: Hazard, ship: HazardTarget, heavy: boolean): HazardEvent {
+function event(h: Hazard, ship: HazardTarget, heavy: boolean, kind: EventKind = h.kind): RaceEvent {
   return {
-    kind: h.kind,
+    kind,
     shipId: ship.id,
     x: ship.state.x,
     z: ship.state.z,

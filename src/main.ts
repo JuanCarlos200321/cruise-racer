@@ -5,7 +5,9 @@ import { World, type ShipView } from './render/world';
 import { cleanCode, inviteLink, joinRoom, openRoom } from './net/peer';
 import { entriesFor, HOST_ID, SnapshotBuffer, takeSnapshot, type EntrySpec } from './net/protocol';
 import { ClientSession, HostSession } from './net/session';
-import { HAZARD_NAMES, type HazardEvent } from './sim/hazards';
+import type { RaceEvent } from './sim/events';
+import { HAZARD_NAMES } from './sim/hazards';
+import { ITEM_HINTS, ITEM_NAMES } from './sim/items';
 import { COUNTDOWN_SECONDS, Race, type RaceEntry, type RaceOptions, type Racer } from './sim/race';
 import { SHIP_CLASSES, toKnots, type ShipClass } from './sim/ships';
 import { Track, TRACKS } from './sim/track';
@@ -56,6 +58,8 @@ let previous: Pose[] = [];
 let demo = false;
 /** Demo with no rivals, for a clear view of the hazards. */
 let solo = false;
+/** A demo can stop the race where it is, to look at it. */
+let held = false;
 let inspect: { angle: number; distance: number; height: number } | null = null;
 
 let clock = 0;
@@ -74,7 +78,7 @@ type Net =
       /** Which racer each remote player is steering. */
       racers: Map<string, number>;
       /** Hazard hits not yet sent to the other players. */
-      events: HazardEvent[];
+      events: RaceEvent[];
     }
   | { role: 'client'; code: string; session: ClientSession; close(): void; buffer: SnapshotBuffer; relayed: boolean };
 let net: Net | null = null;
@@ -82,7 +86,7 @@ let net: Net | null = null;
 let onlineRace = false;
 let connecting = false;
 let lastNetSend = 0;
-let lastHit: { event: HazardEvent; at: number } | null = null;
+let lastHit: { event: RaceEvent; at: number } | null = null;
 
 function shuffled<T>(items: T[]): T[] {
   const copy = [...items];
@@ -105,6 +109,7 @@ function beginRace(entries: RaceEntry[], options: RaceOptions = {}): void {
   onlineRace = false;
   race = new Race(tracks[worldTrack], entries, options);
   world.setHazards(race.hazards?.hazards ?? null);
+  world.setItems(race.items);
   lastHit = null;
   views = race.racers.map((racer) => world.addShip(racer.cls));
   previous = race.racers.map((racer) => ({ ...racer.state }));
@@ -214,7 +219,12 @@ async function hostGame(): Promise<void> {
     session.onReset = (id) => {
       const index = game.racers.get(id);
       if (index === undefined || !onlineRace || race.phase !== 'racing') return;
-      if (!race.racers[index].finished) race.resetToCheckpoint(race.racers[index]);
+      const racer = race.racers[index];
+      if (!racer.finished && racer.sinking <= 0) race.resetToCheckpoint(racer);
+    };
+    session.onUse = (id) => {
+      const index = game.racers.get(id);
+      if (index !== undefined && onlineRace) race.useItem(race.racers[index]);
     };
     ui.setOnline('host');
     ui.setOnlineStatus('');
@@ -420,7 +430,11 @@ input.onAction((action: Action) => {
     case 'race':
       if (action === 'camera') rig.toggleMode();
       else if (action === 'pause') setScreen('paused');
-      else if (action === 'reset' && race.phase === 'racing' && !race.player.finished) {
+      else if (action === 'confirm') {
+        // In a shared race the host fires it for you.
+        if (net?.role === 'client' && onlineRace) net.session.sendUse();
+        else race.useItem(race.player);
+      } else if (action === 'reset' && race.phase === 'racing' && !race.player.finished && race.player.sinking <= 0) {
         // In a shared race only the host can move a ship.
         if (net?.role === 'client' && onlineRace) net.session.sendReset();
         else race.resetToCheckpoint(race.player);
@@ -490,9 +504,13 @@ function hudState(player: Racer, poses: Pose[]): HudState {
 
   let message: HudState['message'] = null;
   if (race.phase === 'racing' && !player.finished) {
-    if (race.isWrongWay(player) && player.state.u > 3) message = { text: 'Wrong way', kind: 'warn' };
+    if (player.sinking > 0) message = { text: 'Abandon ship!', kind: 'warn' };
+    else if (race.isWrongWay(player) && player.state.u > 3) message = { text: 'Wrong way', kind: 'warn' };
     else if (player.offCourse) message = { text: 'Off course', kind: 'warn' };
-    else if (lastHit && race.time - lastHit.at < HIT_MESSAGE_SECONDS) message = { text: hitMessage(lastHit.event), kind: 'warn' };
+    else if (lastHit && race.time - lastHit.at < HIT_MESSAGE_SECONDS) {
+      const good = lastHit.event.kind === 'pickup' || lastHit.event.kind === 'blocked';
+      message = { text: hitMessage(lastHit.event, player), kind: good ? 'info' : 'warn' };
+    }
     else if (player.drafting) message = { text: 'Slipstream', kind: 'info' };
   }
 
@@ -536,6 +554,10 @@ function hudState(player: Racer, poses: Pose[]): HudState {
     raceTime: player.finished ? player.finishTime : race.time,
     nextHazard,
     hazardHits: player.hazardHits,
+    hull: player.hull,
+    item: player.item ? { name: ITEM_NAMES[player.item], hint: ITEM_HINTS[player.item] } : null,
+    boost: player.boost,
+    shield: player.shield,
     countdown: race.phase === 'countdown' ? race.countdown : -1,
     message,
     board: standings.map((racer, i) => {
@@ -549,7 +571,7 @@ function hudState(player: Racer, poses: Pose[]): HudState {
   };
 }
 
-function hitMessage(event: HazardEvent): string {
+function hitMessage(event: RaceEvent, player: Racer): string {
   switch (event.kind) {
     case 'sharks':
       return 'Sharks! Get clear of them';
@@ -559,6 +581,22 @@ function hitMessage(event: HazardEvent): string {
       return 'Cannon fire!';
     case 'wave':
       return event.heavy ? 'Slammed by the wave' : 'Rode the wave';
+    case 'whale':
+      return event.heavy ? 'You hit the whale' : 'Soaked by the whale';
+    case 'splash':
+      return 'Soaked by the whale';
+    case 'crash':
+      return event.heavy ? 'Heavy collision!' : 'Collision';
+    case 'sunk':
+      return 'Abandon ship!';
+    case 'pickup':
+      return player.item ? `${ITEM_NAMES[player.item]} — press Space` : 'Power-up';
+    case 'cork':
+      return 'Hit by a champagne cork';
+    case 'coconut':
+      return 'You ran into a coconut';
+    case 'blocked':
+      return 'Your shield took the hit';
   }
 }
 
@@ -588,7 +626,7 @@ function frame(ms: number): void {
   input.poll();
 
   // A race shared with other players cannot be paused.
-  const running = screen !== 'paused' || onlineRace;
+  const running = (screen !== 'paused' || onlineRace) && !held;
   if (running) {
     clock += dt;
     if (onlineRace && net?.role === 'client') followHost(net.buffer);
@@ -601,7 +639,7 @@ function frame(ms: number): void {
   if (running) {
     race.racers.forEach((racer, i) => {
       const s = racer.state;
-      views[i].update(poses[i].x, poses[i].z, poses[i].heading, s.u, s.r, s.throttle, clock, dt);
+      views[i].update(poses[i].x, poses[i].z, poses[i].heading, s.u, s.r, s.throttle, clock, dt, racer);
     });
   }
 
@@ -648,14 +686,16 @@ function frame(ms: number): void {
     );
   }
 
-  if (race.hazards) world.updateHazards(race.hazards.hazards, clock, running ? dt : 0);
+  world.updateRace(race.hazards?.hazards ?? [], race.items, clock, running ? dt : 0);
   world.update(clock, rig.camera, rig.focus);
   renderer.render(world.scene, rig.camera);
 }
 
 // ?demo=<route id>&ship=<class id> starts a race with the AI at the player's
 // helm. &t=<seconds> runs the race ahead first, &near=<n> runs it until the
-// player is coming up to the nth hazard, &solo leaves out the rivals, and
+// player is coming up to the nth hazard, &solo leaves out the rivals,
+// &hold stops the race there (with &cycle=<0..1> for a whale's routine, and
+// &hull=<0..1>, &sinking=<seconds>, &shield, &boost for the player's ship), and
 // &cam=bridge picks the camera.
 // ?inspect=<class id>&angle=<radians>&dist=<lengths>&h=<lengths> shows one ship
 // from a fixed angle with no menus, for checking the models.
@@ -677,6 +717,25 @@ if (demoTrack !== null) {
       if ((near.index - race.player.trackIndex) * race.track.spacing < gap) break;
       race.step(STEP, { throttle: 0, rudder: 0 });
     }
+  }
+  if (params.has('hold')) {
+    const me = race.player;
+    if (near && params.has('cycle')) {
+      near.cycle = Number(params.get('cycle'));
+      near.strength = 1;
+    }
+    me.hull = Number(params.get('hull') ?? me.hull);
+    me.sinking = Number(params.get('sinking') ?? 0);
+    if (params.has('shield')) me.shield = 10;
+    if (params.has('boost')) me.boost = 3;
+    me.item = 'cork';
+    // One last frame of motion to put everything where it now is, then stop.
+    const view = views[race.racers.indexOf(me)];
+    view.update(me.state.x, me.state.z, me.state.heading, me.state.u, 0, 1, 0, STEP, me);
+    world.updateRace(race.hazards?.hazards ?? [], race.items, 0, STEP);
+    rig.follow({ ...me.state, speed: me.state.u }, me.cls, view.bridge, 1);
+    rig.snap();
+    held = true;
   }
   race.events.length = 0;
   previous = race.racers.map((racer) => ({ ...racer.state }));

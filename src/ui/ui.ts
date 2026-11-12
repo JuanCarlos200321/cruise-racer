@@ -34,6 +34,13 @@ export interface HudState {
   /** Name and distance in metres of the next hazard ahead, if there is one. */
   nextHazard: { name: string; distance: number } | null;
   hazardHits: number;
+  /** State of the hull, 1 to 0. */
+  hull: number;
+  /** The power-up in hand. */
+  item: { name: string; hint: string } | null;
+  /** Seconds of boost and shield left. */
+  boost: number;
+  shield: number;
   /** Seconds to the start, or negative once racing. */
   countdown: number;
   message: { text: string; kind: 'warn' | 'info' } | null;
@@ -211,11 +218,19 @@ const TEMPLATE = /* html */ `
     <div class="gauge-label"><span>ASTERN</span><span>ENGINES</span><span>AHEAD</span></div>
     <div class="gauge"><i id="hud-rudder"></i></div>
     <div class="gauge-label"><span>PORT</span><span>RUDDER</span><span>STBD</span></div>
+    <div class="gauge hull"><i id="hud-hull"></i></div>
+    <div class="gauge-label"><span></span><span id="hud-hull-label">HULL</span><span></span></div>
+  </div>
+  <div class="hud-box" id="hud-item">
+    <div class="label">Power-up</div>
+    <div class="name" id="hud-item-name"></div>
+    <div class="hint" id="hud-item-hint"></div>
+    <div class="active" id="hud-item-active"></div>
   </div>
   <div id="hud-message"></div>
   <div id="hud-countdown"></div>
   <div id="hud-keys">
-    <kbd>W</kbd> ahead &nbsp; <kbd>S</kbd> astern &nbsp; <kbd>A</kbd> <kbd>D</kbd> rudder &nbsp;
+    <kbd>W</kbd> ahead &nbsp; <kbd>S</kbd> astern &nbsp; <kbd>A</kbd> <kbd>D</kbd> rudder &nbsp; <kbd>Space</kbd> power-up &nbsp;
     <kbd>C</kbd> camera &nbsp; <kbd>R</kbd> reset &nbsp; <kbd>Esc</kbd> pause
   </div>
 </section>
@@ -463,6 +478,19 @@ export class Ui {
 
     this.setGauge('hud-throttle', hud.throttle);
     this.setGauge('hud-rudder', hud.rudder);
+
+    const hull = this.el('hud-hull');
+    hull.style.width = `${Math.max(0, hud.hull) * 100}%`;
+    hull.className = hud.hull < 0.3 ? 'critical' : hud.hull < 0.6 ? 'damaged' : '';
+    this.el('hud-hull-label').textContent = `HULL ${Math.round(Math.max(0, hud.hull) * 100)}%`;
+    this.el('hud-item').classList.toggle('empty', !hud.item);
+    this.el('hud-item-name').textContent = hud.item?.name ?? 'None';
+    this.el('hud-item-hint').textContent = hud.item ? `${hud.item.hint} · Space` : 'Sail through a gift box';
+    const active = [
+      hud.boost > 0 ? `Boost ${hud.boost.toFixed(1)}s` : '',
+      hud.shield > 0 ? `Shield ${Math.ceil(hud.shield)}s` : '',
+    ].filter(Boolean);
+    this.el('hud-item-active').textContent = active.join(' · ');
 
     const countdown = this.el('hud-countdown');
     if (hud.countdown > 0) {

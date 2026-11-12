@@ -41,6 +41,8 @@ export class HostSession {
   onLeave: ((id: string) => void) | null = null;
   /** Called when a player asks to be put back at the last checkpoint. */
   onReset: ((id: string) => void) | null = null;
+  /** Called when a player uses their power-up. */
+  onUse: ((id: string) => void) | null = null;
   private readonly links = new Map<string, Link>();
   private readonly helms = new Map<string, Helm>();
   private nextId = 1;
@@ -81,6 +83,8 @@ export class HostSession {
         this.helms.set(id, cleanHelm(message.throttle, message.rudder));
       } else if (message.t === 'reset') {
         this.onReset?.(id);
+      } else if (message.t === 'use') {
+        this.onUse?.(id);
       }
     };
     link.onClose = () => {
@@ -206,6 +210,10 @@ export class ClientSession {
 
   sendReset(): void {
     this.send({ t: 'reset' });
+  }
+
+  sendUse(): void {
+    this.send({ t: 'use' });
   }
 
   leave(): void {

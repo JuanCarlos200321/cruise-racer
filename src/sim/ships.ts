@@ -1,5 +1,5 @@
 /** How much faster than real life the ships sail. Displayed knots divide this back out. */
-export const SPEED_SCALE = 6;
+export const SPEED_SCALE = 9;
 const METRES_PER_SECOND_PER_KNOT = 0.5144;
 
 export function toKnots(worldSpeed: number): number {
@@ -34,7 +34,13 @@ export interface ShipClass {
   mass: number;
 }
 
-export const SHIP_CLASSES: ShipClass[] = [
+/**
+ * The figures below were set when ships sailed at six times real speed. They
+ * now sail half as fast again, with the power and steering to match.
+ */
+const PACE = 1.5;
+
+const BASE_CLASSES: ShipClass[] = [
   {
     id: 'icon',
     name: 'Icon Class',
@@ -111,6 +117,14 @@ export const SHIP_CLASSES: ShipClass[] = [
     mass: 90,
   },
 ];
+
+export const SHIP_CLASSES: ShipClass[] = BASE_CLASSES.map((cls) => ({
+  ...cls,
+  topSpeed: cls.topSpeed * PACE,
+  accel: cls.accel * PACE * 1.2,
+  turnRate: cls.turnRate * 1.3,
+  yawResponse: cls.yawResponse * 1.2,
+}));
 
 export function shipClassById(id: ShipClassId): ShipClass {
   const cls = SHIP_CLASSES.find((c) => c.id === id);

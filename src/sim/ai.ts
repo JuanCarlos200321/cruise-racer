@@ -13,7 +13,9 @@ const BACK_OFF_SPEED = 6;
 const STUCK_SPEED = 4;
 const STUCK_AFTER = 3;
 const REVERSE_FOR = 4;
-const LANE_CHANGE_RATE = 60; // metres per second
+const LANE_CHANGE_RATE = 80; // metres per second
+/** Clear water the AI likes between its side and a ship alongside, metres. */
+const SIDE_ROOM = 45;
 /** How far ahead the AI starts to steer round a hazard: metres, plus metres per m/s of speed. */
 const HAZARD_SIGHT = 500;
 const HAZARD_SIGHT_PER_SPEED = 14;
@@ -91,9 +93,15 @@ export class AiDriver {
       const dz = other.state.z - s.z;
       const ahead = dx * f.x + dz * f.z;
       const side = dx * sb.x + dz * sb.z;
-      const reach = (cls.length + other.cls.length) / 2 + 250;
-      if (ahead > 0 && ahead < reach && Math.abs(side) < (cls.beam + other.cls.beam) * 1.2) {
-        wantedLane = this.laneNow + (side >= 0 ? -1 : 1) * (cls.beam + other.cls.beam);
+      const lengths = (cls.length + other.cls.length) / 2;
+      const beams = (cls.beam + other.cls.beam) / 2;
+      // The faster it is closing, the sooner it has to start.
+      const reach = lengths + 250 + Math.max(0, s.u - other.state.u) * 6;
+      if (ahead > 0 && ahead < reach && Math.abs(side) < beams * 2.4) {
+        wantedLane = this.laneNow + (side >= 0 ? -1 : 1) * beams * 2;
+      } else if (Math.abs(ahead) < lengths && Math.abs(side) < beams + SIDE_ROOM) {
+        // Give a ship alongside some room.
+        wantedLane = this.laneNow + (side >= 0 ? -1 : 1) * beams;
       }
     }
     const laneLimit = Math.max(0, track.halfWidth - cls.beam * 1.5);

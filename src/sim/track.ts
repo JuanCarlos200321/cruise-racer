@@ -3,7 +3,7 @@ import { createRng } from './rng';
 
 export type ObstacleKind = 'island' | 'mountain' | 'rocks' | 'city';
 export type TrackTheme = 'tropical' | 'harbour' | 'fjord';
-export type HazardKind = 'sharks' | 'kraken' | 'wave' | 'pirate';
+export type HazardKind = 'sharks' | 'kraken' | 'wave' | 'pirate' | 'whale';
 
 /** Solid circular obstacle. */
 export interface Obstacle {
@@ -347,7 +347,7 @@ export const TRACKS: TrackDef[] = [
     from: 'Miami',
     to: 'Perfect Day at CocoCay',
     description:
-      'Out through the Miami channel and east across the Gulf Stream to the Bahamas. Sharks, pirates and worse are waiting.',
+      'Out through the Miami channel and east across the Gulf Stream to the Bahamas. Sharks, pirates, whales and worse are waiting.',
     theme: 'tropical',
     halfWidth: 420,
     scale: 1,
@@ -370,7 +370,7 @@ export const TRACKS: TrackDef[] = [
       { type: 'place', kind: 'island', radius: 260, at: 0.97, lateral: -900 },
       { type: 'scatter', kind: 'island', count: 9, minRadius: 80, maxRadius: 240, margin: 320, spread: 1600 },
     ],
-    hazards: ['sharks', 'pirate', 'wave', 'kraken', 'sharks', 'wave', 'pirate', 'kraken'],
+    hazards: ['sharks', 'whale', 'pirate', 'wave', 'kraken', 'whale', 'sharks', 'wave', 'pirate', 'kraken'],
   },
   {
     id: 'canaveral-nassau',
@@ -404,7 +404,7 @@ export const TRACKS: TrackDef[] = [
       { type: 'scatter', kind: 'island', count: 6, minRadius: 80, maxRadius: 200, margin: 350, spread: 1500 },
       { type: 'scatter', kind: 'rocks', count: 8, minRadius: 30, maxRadius: 55, margin: 120, spread: 500 },
     ],
-    hazards: ['pirate', 'sharks', 'pirate', 'wave', 'kraken', 'pirate', 'sharks', 'wave'],
+    hazards: ['pirate', 'whale', 'sharks', 'pirate', 'wave', 'kraken', 'pirate', 'whale', 'sharks', 'wave'],
   },
   {
     id: 'seattle-juneau',
@@ -436,6 +436,6 @@ export const TRACKS: TrackDef[] = [
       { type: 'place', kind: 'mountain', radius: 520, at: 1, lateral: 0, ahead: 800 },
       { type: 'scatter', kind: 'mountain', count: 14, minRadius: 220, maxRadius: 420, margin: 500, spread: 1800 },
     ],
-    hazards: ['wave', 'kraken', 'sharks', 'wave', 'pirate', 'kraken', 'wave', 'kraken'],
+    hazards: ['wave', 'whale', 'kraken', 'sharks', 'wave', 'whale', 'pirate', 'kraken', 'wave', 'whale'],
   },
 ];
