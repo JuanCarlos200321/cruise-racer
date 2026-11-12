@@ -141,11 +141,15 @@ function startRace(): void {
     isPlayer: false,
     pace: paces[i],
   }));
-  // The player starts at the back of the grid.
-  const entries: RaceEntry[] = [
-    ...shuffled(rivals),
-    { cls: player, name: player.shipNames[0], isPlayer: true, pace: PLAYER_AUTOPILOT_PACE, autopilot: demo },
-  ];
+  // The player starts in the middle of the line.
+  const entries: RaceEntry[] = shuffled(rivals);
+  entries.splice(Math.floor(entries.length / 2), 0, {
+    cls: player,
+    name: player.shipNames[0],
+    isPlayer: true,
+    pace: PLAYER_AUTOPILOT_PACE,
+    autopilot: demo,
+  });
   beginRace(entries);
   world.course.setGatesVisible(true);
   ui.beginRace(race.track, rivals.length);

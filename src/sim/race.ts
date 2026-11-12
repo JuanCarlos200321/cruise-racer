@@ -1,7 +1,7 @@
 import { AiDriver } from './ai';
 import { resolveObstacles, resolveShips } from './collision';
 import { absorb, hurt, type RaceEvent } from './events';
-import { HazardField } from './hazards';
+import { HazardField, PIRATE_HULL_RADIUS } from './hazards';
 import { ItemField, type ItemKind } from './items';
 import { createShipState, forward, starboard, stepShip, type Helm, type ShipState } from './physics';
 import type { ShipClass } from './ships';
@@ -78,9 +78,12 @@ export const COUNTDOWN_SECONDS = 4;
 const OFF_COURSE_DRAG = 4;
 const DRAFT_DRAG = 0.8;
 const DRAFT_LENGTH = 450;
-const GRID_FRONT_ROW = 260;
-const GRID_ROW_GAP = 440;
-const GRID_LANES = [-0.5, 0, 0.5];
+/** How far behind the start line the ships line up, metres. */
+const GRID_BACK = 260;
+/** How much of the channel the line of ships takes up, as a share of its half-width either side. */
+const GRID_SPREAD = 0.7;
+/** Share of its place on the grid that an AI ship keeps as its lane, so the line does not close up into a scrum. */
+const AI_LANE_SHARE = 0.8;
 /** An AI ship stopped for this long is put back on the route. */
 const AI_RESCUE_AFTER = 10;
 /** Closing speed below which a bump does not count as a collision, m/s. */
@@ -119,16 +122,16 @@ export class Race {
   time = 0;
   private readonly loop: boolean;
 
-  /** Entries are placed on the grid in order: front row first, port to starboard. */
+  /** Entries line up side by side behind the start, in order from port to starboard. */
   constructor(track: Track, entries: RaceEntry[], options: RaceOptions = {}) {
     this.track = track;
     this.loop = options.loop ?? false;
     this.hazards = (options.hazards ?? true) ? new HazardField(track) : null;
     this.items = (options.items ?? options.hazards ?? true) ? new ItemField(track) : null;
     entries.forEach((entry, slot) => {
-      const row = Math.floor(slot / GRID_LANES.length);
-      const lane = GRID_LANES[slot % GRID_LANES.length] * Math.min(track.halfWidth, 300);
-      const back = Math.round((GRID_FRONT_ROW + row * GRID_ROW_GAP) / track.spacing);
+      const across = entries.length > 1 ? (slot / (entries.length - 1)) * 2 - 1 : 0;
+      const lane = across * GRID_SPREAD * track.halfWidth;
+      const back = Math.round(GRID_BACK / track.spacing);
       const index = track.clampIndex(track.startIndex - back);
       const p = track.pointAt(index, lane);
       this.racers.push({
@@ -139,7 +142,7 @@ export class Race {
         autopilot: entry.autopilot ?? !(entry.isPlayer || entry.human),
         helm: entry.human ? { throttle: 0, rudder: 0 } : null,
         state: createShipState(p.x, p.z, track.headingAt(index)),
-        ai: new AiDriver(entry.pace, lane * 0.45),
+        ai: new AiDriver(entry.pace, lane * AI_LANE_SHARE),
         trackIndex: index,
         lateral: lane,
         progress: index - track.startIndex,
@@ -199,7 +202,11 @@ export class Race {
     }
     this.time += dt;
 
-    const hazards = this.hazards?.hazards ?? [];
+    // The AI gives a pirate ship room but does not try to stay out of range of
+    // its guns: that would squeeze a whole field into a sliver of the channel.
+    const hazards = (this.hazards?.hazards ?? []).map((h) =>
+      h.kind === 'pirate' ? { index: h.index, lateral: h.lateral, strength: h.strength, r: PIRATE_HULL_RADIUS * 2 } : h,
+    );
     for (const racer of this.racers) {
       const others = this.racers.filter((r) => r !== racer);
       racer.boost = Math.max(0, racer.boost - dt);
