@@ -1,5 +1,5 @@
 import { hullCircles } from './collision';
-import { absorb, hurt, type RaceEvent } from './events';
+import { absorb, type RaceEvent } from './events';
 import { forward, starboard, type ShipState } from './physics';
 import { createRng } from './rng';
 import type { ShipClass } from './ships';
@@ -22,7 +22,7 @@ export const ITEM_HINTS: Record<ItemKind, string> = {
   shield: 'Takes the next hit for you',
   cork: 'Fires at the ship ahead',
   coconut: 'Drops trouble behind you',
-  repair: 'Mends half your hull',
+  repair: 'Mends your hull',
 };
 
 /** A floating gift box. Sailing through one gives a ship a power-up. */
@@ -68,16 +68,14 @@ export interface ItemUser {
   finished: boolean;
 }
 
-/** Metres between rows of boxes along the route. */
-const ROW_SPACING = 1100;
-const FIRST_ROW = 700;
+/** Where the rows of boxes are along the route, as shares of its length. */
+const ROWS = [0.25, 0.5, 0.75];
 /** Where the boxes of a row sit across the channel, as shares of the half-width. */
 const ROW_LATERALS = [-0.62, -0.31, 0, 0.31, 0.62];
 export const BOX_RADIUS = 20;
 const BOX_RESPAWN = 6;
 export const BOOST_SECONDS = 3.5;
 export const SHIELD_SECONDS = 12;
-const REPAIR_AMOUNT = 0.5;
 /** Well over the speed of the quickest ship, or it would never catch one. */
 const CORK_SPEED = 260;
 const CORK_TURN_RATE = 2.4;
@@ -85,14 +83,12 @@ const CORK_LIFE = 7;
 const CORK_RANGE = 2200;
 const CORK_RADIUS = 14;
 const CORK_SPEED_KEPT = 0.45;
-const CORK_DAMAGE = 0.15;
 const COCONUT_OFFSETS = [-48, 0, 48];
 const COCONUT_LIFE = 45;
 /** Seconds before a ship's own coconuts can catch it. */
 const COCONUT_ARM = 3;
 const COCONUT_RADIUS = 12;
 const COCONUT_SPEED_KEPT = 0.6;
-const COCONUT_DAMAGE = 0.06;
 const MAX_DROPS = 30;
 
 /** The power-ups on a route: boxes to collect, and corks and coconuts in play. */
@@ -107,9 +103,8 @@ export class ItemField {
   constructor(track: Track) {
     this.track = track;
     this.rng = createRng(track.def.seed * 13 + 5);
-    const rows = Math.floor((track.raceLength - FIRST_ROW * 2) / ROW_SPACING) + 1;
-    for (let row = 0; row < rows; row++) {
-      const index = track.startIndex + Math.round((FIRST_ROW + row * ROW_SPACING) / track.spacing);
+    for (const row of ROWS) {
+      const index = track.startIndex + Math.round((track.finishIndex - track.startIndex) * row);
       for (const share of ROW_LATERALS) {
         const p = track.pointAt(index, share * track.halfWidth);
         this.boxes.push({ x: p.x, z: p.z, ready: true });
@@ -155,7 +150,6 @@ export class ItemField {
         } else {
           ship.state.u *= CORK_SPEED_KEPT;
           ship.state.r += this.rng() < 0.5 ? -0.12 : 0.12;
-          hurt(ship, CORK_DAMAGE);
           events.push(eventAt('cork', ship, shot.x, shot.z));
         }
         return false;
@@ -173,7 +167,6 @@ export class ItemField {
         } else {
           ship.state.u *= COCONUT_SPEED_KEPT;
           ship.state.r += this.rng() < 0.5 ? -0.18 : 0.18;
-          hurt(ship, COCONUT_DAMAGE);
           events.push(eventAt('coconut', ship, drop.x, drop.z));
         }
         return false;
@@ -195,7 +188,7 @@ export class ItemField {
     } else if (item === 'shield') {
       ship.shield = SHIELD_SECONDS;
     } else if (item === 'repair') {
-      ship.hull = Math.min(1, ship.hull + REPAIR_AMOUNT);
+      ship.hull = 1;
     } else if (item === 'cork') {
       const ahead = ship.cls.length / 2 + CORK_RADIUS + 10;
       this.shots.push({ x: s.x + f.x * ahead, z: s.z + f.z * ahead, heading: s.heading, owner: ship.id, life: CORK_LIFE });

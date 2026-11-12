@@ -55,9 +55,9 @@ export interface Racer {
   stalledFor: number;
   /** Times a hazard has caught this ship. */
   hazardHits: number;
-  /** State of the hull, from 1 (sound) to 0 (going down). A damaged ship is slower. */
+  /** State of the hull, from 1 (sound) to 0 (going down). Each collision takes a third. A damaged ship is slower. */
   hull: number;
-  /** Seconds left going down, or 0 when afloat. The ship comes back at the last checkpoint. */
+  /** Seconds left going down, or 0 when afloat. The ship comes back where it sank. */
   sinking: number;
   /** The power-up the ship is holding, and for how many seconds it has had it. */
   item: ItemKind | null;
@@ -67,6 +67,9 @@ export interface Racer {
   shield: number;
   /** Seconds until another collision can damage the ship: one crash is one blow, however long the hulls grind. */
   crashProof: number;
+  /** Where the ship went down, and where it comes back. */
+  wreckX: number;
+  wreckZ: number;
 }
 
 export type RacePhase = 'countdown' | 'racing';
@@ -80,16 +83,17 @@ const GRID_ROW_GAP = 440;
 const GRID_LANES = [-0.5, 0, 0.5];
 /** An AI ship stopped for this long is put back on the route. */
 const AI_RESCUE_AFTER = 10;
-/** Closing speed below which a bump does no damage, m/s. */
+/** Closing speed below which a bump does not count as a collision, m/s. */
 const CRASH_THRESHOLD = 14;
-/** Hull lost per m/s of closing speed above that. */
-const CRASH_DAMAGE = 0.006;
-/** The most one collision can take off the hull. */
-const CRASH_LIMIT = 0.6;
+/** Closing speed above which a collision is shown as a heavy one, m/s. */
+const HEAVY_CRASH = 45;
+/** This many collisions sink a ship. */
+export const COLLISIONS_TO_SINK = 3;
 const CRASH_COOLDOWN = 1.2;
 /** Extra drag on a ship with no hull left, as a share of normal drag. */
 const DAMAGE_DRAG = 0.6;
-export const SINK_SECONDS = 4.5;
+/** How long a sunk ship is out of the race before it comes back where it went down. */
+export const SINK_SECONDS = 5;
 const SINKING_DRAG = 10;
 /** Shield a ship gets when it comes back after sinking, seconds. */
 const RESPAWN_SHIELD = 4;
@@ -98,9 +102,7 @@ const BOOST_DRAG = 0.55;
 const BOOST_THRUST = 1.2;
 const HAZARD_KINDS = new Set(['sharks', 'kraken', 'wave', 'pirate', 'whale']);
 
-function crashDamage(impact: number): number {
-  return Math.min(CRASH_LIMIT, Math.max(0, impact - CRASH_THRESHOLD) * CRASH_DAMAGE);
-}
+
 
 /** A race from the start line of a route to its finish line. */
 export class Race {
@@ -155,6 +157,8 @@ export class Race {
         boost: 0,
         shield: 0,
         crashProof: 0,
+        wreckX: 0,
+        wreckZ: 0,
       });
     });
   }
@@ -240,7 +244,7 @@ export class Race {
       if (solids.length) {
         racer.impact = Math.max(racer.impact, resolveObstacles(racer.state, racer.cls, solids));
       }
-      this.crash(racer, crashDamage(racer.impact));
+      this.crash(racer, racer.impact);
     }
     for (let i = 0; i < this.racers.length; i++) {
       for (let j = i + 1; j < this.racers.length; j++) {
@@ -250,10 +254,8 @@ export class Race {
         if (impact <= 0) continue;
         a.impact = Math.max(a.impact, impact);
         b.impact = Math.max(b.impact, impact);
-        // The lighter ship comes off worse.
-        const total = a.cls.mass + b.cls.mass;
-        this.crash(a, (crashDamage(impact) * 2 * b.cls.mass) / total);
-        this.crash(b, (crashDamage(impact) * 2 * a.cls.mass) / total);
+        this.crash(a, impact);
+        this.crash(b, impact);
       }
     }
 
@@ -262,12 +264,15 @@ export class Race {
         racer.sinking -= dt;
         if (racer.sinking <= 0) {
           racer.sinking = 0;
-          if (!racer.finished) this.resetToCheckpoint(racer);
+          // Back afloat where the last collision happened, stopped.
+          Object.assign(racer.state, { x: racer.wreckX, z: racer.wreckZ, u: 0, v: 0, r: 0 });
           racer.hull = 1;
           racer.shield = RESPAWN_SHIELD;
         }
       } else if (racer.hull <= 0) {
         racer.sinking = SINK_SECONDS;
+        racer.wreckX = racer.state.x;
+        racer.wreckZ = racer.state.z;
         racer.boost = 0;
         racer.item = null;
         racer.stalledFor = 0;
@@ -290,16 +295,18 @@ export class Race {
     if (this.phase === 'racing') this.items?.use(racer);
   }
 
-  /** Take hull off a racer for a collision, unless its shield takes it. */
-  private crash(racer: Racer, damage: number): void {
-    if (damage < 0.01 || racer.sinking > 0 || racer.crashProof > 0) return;
+  /** Count a collision against a racer's hull, unless its shield takes it. */
+  private crash(racer: Racer, impact: number): void {
+    if (impact < CRASH_THRESHOLD || racer.sinking > 0 || racer.crashProof > 0) return;
     racer.crashProof = CRASH_COOLDOWN;
     if (absorb(racer)) {
       this.events.push(this.eventFor('blocked', racer, false));
       return;
     }
-    hurt(racer, Math.min(CRASH_LIMIT, damage));
-    this.events.push(this.eventFor('crash', racer, damage > 0.2));
+    hurt(racer, 1 / COLLISIONS_TO_SINK);
+    // Thirds do not add up exactly.
+    if (racer.hull < 0.01) racer.hull = 0;
+    this.events.push(this.eventFor('crash', racer, impact > HEAVY_CRASH));
   }
 
   private eventFor(kind: RaceEvent['kind'], racer: Racer, heavy: boolean): RaceEvent {

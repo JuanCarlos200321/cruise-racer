@@ -17,7 +17,7 @@ function shipAt(track: Track, index: number, lateral: number, speed: number): Ha
   const p = track.pointAt(index, lateral);
   const state = createShipState(p.x, p.z, track.headingAt(index));
   state.u = cls.topSpeed * speed;
-  return { id: 0, state, cls, shield: 0, hull: 1 };
+  return { id: 0, state, cls, shield: 0 };
 }
 
 function only(field: HazardField): Hazard {
@@ -223,7 +223,6 @@ describe('whale crossing', () => {
     expect(events.map((e) => e.kind)).toEqual(['splash', 'whale']);
     expect(events[1].heavy).toBe(false);
     expect(ship.state.u).toBeLessThan(cls.topSpeed * 0.8);
-    expect(ship.hull).toBeLessThan(1);
   });
 
   it('stops a ship that runs into it, and does real damage', () => {
@@ -236,7 +235,6 @@ describe('whale crossing', () => {
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({ kind: 'whale', heavy: true });
     expect(ship.state.u).toBeLessThan(cls.topSpeed * 0.5);
-    expect(ship.hull).toBeLessThan(0.9);
     expect(field.step(DT, [ship])).toHaveLength(0);
   });
 
@@ -261,7 +259,6 @@ describe('shields', () => {
     const events = field.step(DT, [ship]);
     expect(events.map((e) => e.kind)).toEqual(['blocked']);
     expect(ship.shield).toBe(0);
-    expect(ship.hull).toBe(1);
     expect(ship.state.u).toBe(cls.topSpeed);
   });
 });
@@ -287,6 +284,7 @@ describe('AI and hazards', () => {
     race.step(DT, { throttle: 1, rudder: 0 });
     expect(race.player.hazardHits).toBe(1);
     expect(race.events.filter((e) => e.kind === 'kraken')).toHaveLength(1);
-    expect(race.player.hull).toBeLessThan(1);
+    // Only collisions wear down the hull.
+    expect(race.player.hull).toBe(1);
   });
 });

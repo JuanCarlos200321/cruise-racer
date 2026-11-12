@@ -481,8 +481,9 @@ export class Ui {
 
     const hull = this.el('hud-hull');
     hull.style.width = `${Math.max(0, hud.hull) * 100}%`;
-    hull.className = hud.hull < 0.3 ? 'critical' : hud.hull < 0.6 ? 'damaged' : '';
-    this.el('hud-hull-label').textContent = `HULL ${Math.round(Math.max(0, hud.hull) * 100)}%`;
+    hull.className = hud.hull < 0.5 ? 'critical' : hud.hull < 0.9 ? 'damaged' : '';
+    // Three collisions sink a ship.
+    this.el('hud-hull-label').textContent = `HULL ${Math.round(Math.max(0, hud.hull) * 3)}/3`;
     this.el('hud-item').classList.toggle('empty', !hud.item);
     this.el('hud-item-name').textContent = hud.item?.name ?? 'None';
     this.el('hud-item-hint').textContent = hud.item ? `${hud.item.hint} · Space` : 'Sail through a gift box';

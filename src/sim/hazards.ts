@@ -1,5 +1,5 @@
 import { hullCircles } from './collision';
-import { absorb, hurt, type EventKind, type RaceEvent } from './events';
+import { absorb, type EventKind, type RaceEvent } from './events';
 import { forward, starboard, type ShipState } from './physics';
 import { createRng } from './rng';
 import type { ShipClass } from './ships';
@@ -31,8 +31,6 @@ export interface HazardTarget {
   cls: ShipClass;
   /** Seconds of shield left. A shield takes one hit and is gone. */
   shield: number;
-  /** 1 (sound) to 0 (sinking). */
-  hull: number;
 }
 
 export const HAZARD_NAMES: Record<HazardKind, string> = {
@@ -50,10 +48,8 @@ const LAST_AT = 0.93;
 /** Sharks hold a ship to this share of its top speed. */
 const SHARK_SPEED_CAP = 0.4;
 const SHARK_PATROL_RATE = 0.1; // rad/s
-const SHARK_DAMAGE = 0.04;
 const KRAKEN_HOLD = 3.5;
 const KRAKEN_RELEASE = 20;
-const KRAKEN_DAMAGE = 0.12;
 const WAVE_SPEED = 24;
 /** A wave runs this far either side of where it is centred, metres. */
 const WAVE_RUN = 900;
@@ -63,7 +59,6 @@ const WAVE_COOLDOWN = 6;
 /** Above this share of top speed a wave slams the ship even bow-on. */
 const WAVE_SAFE_SPEED = 0.6;
 const WAVE_SHOVE = 24;
-const WAVE_DAMAGE = 0.12;
 const PIRATE_SPEED = 13;
 export const PIRATE_HULL_RADIUS = 46;
 export const CANNON_RANGE = 260;
@@ -73,7 +68,6 @@ const CANNON_COOLDOWN = 25;
 /** Radius of the circle the galleon sails round, as a share of the channel half-width. */
 const PIRATE_CIRCLE = 0.25;
 const CANNON_SPEED_KEPT = 0.72;
-const CANNON_DAMAGE = 0.1;
 const WHALE_SPEED = 16;
 /** How far across the channel a whale swims before it dives and turns, as a share of the half-width. */
 const WHALE_REACH = 0.85;
@@ -86,8 +80,6 @@ export const WHALE_SLAP_AT = 0.8;
 export const WHALE_TAIL = 0.9;
 const WHALE_SPLASH_RADIUS = 95;
 const WHALE_COOLDOWN = 6;
-const WHALE_DAMAGE = 0.15;
-const WHALE_SPLASH_DAMAGE = 0.04;
 
 interface Live extends Hazard {
   home: number;
@@ -212,7 +204,6 @@ export class HazardField {
       if (s.u > cap) s.u -= (s.u - cap) * Math.min(1, 2.5 * dt);
       if (!h.inside.has(ship.id)) {
         h.inside.add(ship.id);
-        hurt(ship, SHARK_DAMAGE);
         events.push(event(h, ship, false));
       }
     }
@@ -235,7 +226,6 @@ export class HazardField {
           events.push(event(h, ship, false, 'blocked'));
         } else {
           h.held.set(ship.id, KRAKEN_HOLD);
-          hurt(ship, KRAKEN_DAMAGE);
           events.push(event(h, ship, true));
         }
       }
@@ -288,7 +278,6 @@ export class HazardField {
         s.u += -WAVE_SHOVE * (t.x * f.x + t.z * f.z);
         s.v += -WAVE_SHOVE * (t.x * sb.x + t.z * sb.z);
         s.r += (bowOn < 0.85 ? 0.12 : 0.04) * Math.sign(across || 1);
-        hurt(ship, WAVE_DAMAGE);
       } else {
         s.u *= 0.92;
       }
@@ -333,7 +322,6 @@ export class HazardField {
       return;
     }
     target.state.u *= CANNON_SPEED_KEPT;
-    hurt(target, CANNON_DAMAGE);
     events.push(event(h, target, false));
   }
 
@@ -371,7 +359,6 @@ export class HazardField {
           continue;
         }
         ship.state.u *= 0.75;
-        hurt(ship, WHALE_SPLASH_DAMAGE);
         events.push(event(h, ship, false));
       }
     }
@@ -386,7 +373,6 @@ export class HazardField {
       const s = ship.state;
       s.u *= 0.4;
       s.r += 0.1 * h.side;
-      hurt(ship, WHALE_DAMAGE);
       events.push(event(h, ship, true));
     }
   }
