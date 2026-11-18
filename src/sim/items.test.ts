@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { BOOST_SECONDS, ITEM_KINDS, ItemField, SHIELD_SECONDS, type ItemKind, type ItemUser } from './items';
 import { createShipState } from './physics';
-import { COLLISIONS_TO_SINK, Race, SINK_SECONDS } from './race';
+import { BUMPS_TO_DOCK, Race, DOCK_SECONDS } from './race';
 import { SHIP_CLASSES } from './ships';
 import { Track, TRACKS } from './track';
 
@@ -21,7 +21,7 @@ function shipAt(id: number, index: number, lateral = 0, speed = 0.5): ItemUser {
     hull: 1,
     shield: 0,
     boost: 0,
-    sinking: 0,
+    docked: 0,
     item: null,
     itemHeld: 0,
     progress: index - track.startIndex,
@@ -231,7 +231,7 @@ describe('power-ups in a race', () => {
   });
 });
 
-describe('damage', () => {
+describe('bumps and the dry dock', () => {
   function pair(): Race {
     const entries = [0, 4].map((i) => ({ cls: SHIP_CLASSES[i], name: `Ship ${i}`, isPlayer: i === 0, pace: 1 }));
     const race = new Race(track, entries, { hazards: false });
@@ -259,34 +259,34 @@ describe('damage', () => {
     b.helm = { throttle: 0, rudder: 0 };
   }
 
-  it('a gentle bump does none', () => {
+  it('a gentle touch does not count', () => {
     const race = pair();
     ram(race, 0.05);
     for (let i = 0; i < 3 * 60; i++) race.step(DT, { throttle: 0, rudder: 0 });
     expect(race.racers.map((r) => r.hull)).toEqual([1, 1]);
-    expect(race.events.filter((e) => e.kind === 'crash')).toHaveLength(0);
+    expect(race.events.filter((e) => e.kind === 'bump')).toHaveLength(0);
   });
 
-  it('a collision takes a third of the hull off both ships, once', () => {
+  it('a bump takes a third off both ships, once', () => {
     const race = pair();
     ram(race, 0.9);
     for (let i = 0; i < 30; i++) race.step(DT, { throttle: 0, rudder: 0 });
     for (const racer of race.racers) expect(racer.hull).toBeCloseTo(2 / 3);
-    expect(race.events.filter((e) => e.kind === 'crash').map((e) => e.shipId).sort()).toEqual([0, 1]);
+    expect(race.events.filter((e) => e.kind === 'bump').map((e) => e.shipId).sort()).toEqual([0, 1]);
   });
 
-  it('the third collision sinks a ship', () => {
+  it('the third bump sends a ship into dry dock', () => {
     const race = pair();
     const small = race.racers[1];
-    for (let n = 1; n <= COLLISIONS_TO_SINK; n++) {
-      expect(small.sinking).toBe(0);
+    for (let n = 1; n <= BUMPS_TO_DOCK; n++) {
+      expect(small.docked).toBe(0);
       ram(race, 0.9);
       race.racers[0].hull = 1;
       for (let i = 0; i < 2 * 60; i++) race.step(DT, { throttle: 0, rudder: 0 });
-      expect(race.events.filter((e) => e.kind === 'crash' && e.shipId === 1)).toHaveLength(n);
+      expect(race.events.filter((e) => e.kind === 'bump' && e.shipId === 1)).toHaveLength(n);
     }
-    expect(small.sinking).toBeGreaterThan(0);
-    expect(race.events.filter((e) => e.kind === 'sunk').map((e) => e.shipId)).toEqual([1]);
+    expect(small.docked).toBeGreaterThan(0);
+    expect(race.events.filter((e) => e.kind === 'drydock').map((e) => e.shipId)).toEqual([1]);
   });
 
   it('a shield takes a collision', () => {
@@ -299,7 +299,7 @@ describe('damage', () => {
     expect(race.racers[0].hull).toBeLessThan(1);
   });
 
-  it('running into the rocks at speed counts as a collision', () => {
+  it('running into the rocks at speed counts as a bump', () => {
     const route = new Track(TRACKS.find((def) => def.id === 'seattle-juneau')!);
     const race = new Race(route, [{ cls, name: 'Test', isPlayer: true, pace: 1 }], { hazards: false });
     for (let i = 0; i < 5 * 60; i++) race.step(DT, { throttle: 0, rudder: 0 });
@@ -311,7 +311,7 @@ describe('damage', () => {
     expect(race.player.hull).toBeCloseTo(2 / 3);
   });
 
-  it('a damaged ship is slower than a sound one', () => {
+  it('a worn ship is slower than a shipshape one', () => {
     const top = (hull: number): number => {
       const race = new Race(track, [{ cls, name: 'Test', isPlayer: false, pace: 1 }], { hazards: false });
       for (let i = 0; i < 60 * 60; i++) {
@@ -321,34 +321,35 @@ describe('damage', () => {
       return race.racers[0].state.u;
     };
     const sound = top(1);
-    const damaged = top(0.2);
-    expect(damaged).toBeLessThan(sound * 0.9);
-    expect(damaged).toBeGreaterThan(sound * 0.6);
+    const worn = top(0.2);
+    expect(worn).toBeLessThan(sound * 0.9);
+    expect(worn).toBeGreaterThan(sound * 0.6);
   });
 
-  it('a ship with no hull left sinks, then comes back sound where it went down', () => {
+  it('a ship with no hull left is held in dry dock where it is, then sets off shipshape', () => {
     const race = new Race(track, [{ cls, name: 'Test', isPlayer: false, pace: 1 }], { hazards: false });
     const racer = race.racers[0];
     for (let i = 0; i < 60 * 60; i++) race.step(DT, { throttle: 0, rudder: 0 });
-    const wreck = { x: racer.state.x, z: racer.state.z };
+    const dock = { x: racer.state.x, z: racer.state.z };
     racer.item = 'boost';
     racer.hull = 0;
     race.step(DT, { throttle: 0, rudder: 0 });
-    expect(racer.sinking).toBeGreaterThan(0);
+    expect(racer.docked).toBeGreaterThan(0);
     expect(racer.item).toBeNull();
-    expect(race.events.map((e) => e.kind)).toContain('sunk');
+    expect(race.events.map((e) => e.kind)).toContain('drydock');
 
-    for (let i = 0; i < (SINK_SECONDS - 0.5) * 60; i++) race.step(DT, { throttle: 0, rudder: 0 });
-    expect(racer.sinking).toBeGreaterThan(0);
-    expect(racer.state.u).toBeLessThan(cls.topSpeed * 0.2);
+    for (let i = 0; i < (DOCK_SECONDS - 0.5) * 60; i++) race.step(DT, { throttle: 0, rudder: 0 });
+    expect(racer.docked).toBeGreaterThan(0);
+    expect(racer.state.u).toBe(0);
+    expect(Math.hypot(racer.state.x - dock.x, racer.state.z - dock.z)).toBeLessThan(2);
 
     for (let i = 0; i < 31; i++) race.step(DT, { throttle: 0, rudder: 0 });
-    expect(racer.sinking).toBe(0);
+    expect(racer.docked).toBe(0);
     expect(racer.hull).toBe(1);
     expect(racer.shield).toBeGreaterThan(0);
     // It has had a moment to get under way again.
-    expect(Math.hypot(racer.state.x - wreck.x, racer.state.z - wreck.z)).toBeLessThan(5);
-    expect(race.events.filter((e) => e.kind === 'sunk')).toHaveLength(1);
+    expect(Math.hypot(racer.state.x - dock.x, racer.state.z - dock.z)).toBeLessThan(5);
+    expect(race.events.filter((e) => e.kind === 'drydock')).toHaveLength(1);
   });
 
   it('a full field still gets everyone to the destination', () => {

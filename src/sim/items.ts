@@ -14,15 +14,15 @@ export const ITEM_NAMES: Record<ItemKind, string> = {
   shield: 'Crown & Anchor Shield',
   cork: 'Champagne Cork',
   coconut: 'Lime & Coconut',
-  repair: 'Dry Dock Repair',
+  repair: 'Dry Dock Refit',
 };
 
 export const ITEM_HINTS: Record<ItemKind, string> = {
   boost: 'A burst of speed',
-  shield: 'Takes the next hit for you',
-  cork: 'Fires at the ship ahead',
-  coconut: 'Drops trouble behind you',
-  repair: 'Mends your hull',
+  shield: 'Keeps the next bump off you',
+  cork: 'Pops at the ship ahead',
+  coconut: 'Leaves a surprise behind you',
+  repair: 'Back to shipshape',
 };
 
 /** A floating gift box. Sailing through one gives a ship a power-up. */
@@ -58,8 +58,8 @@ export interface ItemUser {
   hull: number;
   shield: number;
   boost: number;
-  /** Seconds left going down. A sinking ship cannot pick up or use anything. */
-  sinking: number;
+  /** Seconds left in dry dock. A docked ship cannot pick up or use anything. */
+  docked: number;
   item: ItemKind | null;
   /** Seconds the ship has had its item. */
   itemHeld: number;
@@ -123,7 +123,7 @@ export class ItemField {
         return;
       }
       for (const ship of ships) {
-        if (ship.item || ship.sinking > 0 || ship.finished || !touches(ship, box.x, box.z, BOX_RADIUS)) continue;
+        if (ship.item || ship.docked > 0 || ship.finished || !touches(ship, box.x, box.z, BOX_RADIUS)) continue;
         ship.item = this.pick(ship, ships);
         ship.itemHeld = 0;
         box.ready = false;
@@ -179,7 +179,7 @@ export class ItemField {
   /** Use the power-up a ship is holding. Does nothing if it has none. */
   use(ship: ItemUser): void {
     const item = ship.item;
-    if (!item || ship.sinking > 0 || ship.finished) return;
+    if (!item || ship.docked > 0 || ship.finished) return;
     ship.item = null;
     const s = ship.state;
     const f = forward(s.heading);
@@ -212,7 +212,7 @@ export class ItemField {
     if (!ship.item || ship.itemHeld < 1.5 + (ship.id % 3)) return false;
     const spacing = this.track.spacing;
     const gapTo = (other: ItemUser): number => (other.progress - ship.progress) * spacing;
-    const others = ships.filter((other) => other !== ship && other.sinking <= 0);
+    const others = ships.filter((other) => other !== ship && other.docked <= 0);
     switch (ship.item) {
       case 'boost':
       case 'shield':
@@ -250,7 +250,7 @@ export class ItemField {
     let best: ItemUser | null = null;
     let nearest = CORK_RANGE;
     for (const ship of ships) {
-      if (ship.id === shot.owner || ship.sinking > 0) continue;
+      if (ship.id === shot.owner || ship.docked > 0) continue;
       const dx = ship.state.x - shot.x;
       const dz = ship.state.z - shot.z;
       const d = Math.hypot(dx, dz);

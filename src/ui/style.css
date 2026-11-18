@@ -771,12 +771,12 @@ input:focus {
   transition: width 0.2s;
 }
 
-.gauge.hull i.damaged {
-  background: #ffb020;
+.gauge.hull i.worn {
+  background: #ffd23f;
 }
 
-.gauge.hull i.critical {
-  background: #e3262c;
+.gauge.hull i.low {
+  background: #ffb020;
 }
 
 #hud-item {

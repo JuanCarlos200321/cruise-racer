@@ -224,7 +224,7 @@ async function hostGame(): Promise<void> {
       const index = game.racers.get(id);
       if (index === undefined || !onlineRace || race.phase !== 'racing') return;
       const racer = race.racers[index];
-      if (!racer.finished && racer.sinking <= 0) race.resetToCheckpoint(racer);
+      if (!racer.finished && racer.docked <= 0) race.resetToCheckpoint(racer);
     };
     session.onUse = (id) => {
       const index = game.racers.get(id);
@@ -438,7 +438,7 @@ input.onAction((action: Action) => {
         // In a shared race the host fires it for you.
         if (net?.role === 'client' && onlineRace) net.session.sendUse();
         else race.useItem(race.player);
-      } else if (action === 'reset' && race.phase === 'racing' && !race.player.finished && race.player.sinking <= 0) {
+      } else if (action === 'reset' && race.phase === 'racing' && !race.player.finished && race.player.docked <= 0) {
         // In a shared race only the host can move a ship.
         if (net?.role === 'client' && onlineRace) net.session.sendReset();
         else race.resetToCheckpoint(race.player);
@@ -508,11 +508,11 @@ function hudState(player: Racer, poses: Pose[]): HudState {
 
   let message: HudState['message'] = null;
   if (race.phase === 'racing' && !player.finished) {
-    if (player.sinking > 0) message = { text: 'Abandon ship!', kind: 'warn' };
+    if (player.docked > 0) message = { text: 'Dry dock: a quick refit', kind: 'info' };
     else if (race.isWrongWay(player) && player.state.u > 3) message = { text: 'Wrong way', kind: 'warn' };
     else if (player.offCourse) message = { text: 'Off course', kind: 'warn' };
     else if (lastHit && race.time - lastHit.at < HIT_MESSAGE_SECONDS) {
-      const good = lastHit.event.kind === 'pickup' || lastHit.event.kind === 'blocked';
+      const good = ['pickup', 'blocked', 'drydock'].includes(lastHit.event.kind);
       message = { text: hitMessage(lastHit.event, player), kind: good ? 'info' : 'warn' };
     }
     else if (player.drafting) message = { text: 'Slipstream', kind: 'info' };
@@ -580,27 +580,27 @@ function hitMessage(event: RaceEvent, player: Racer): string {
     case 'sharks':
       return 'Sharks! Get clear of them';
     case 'kraken':
-      return 'The kraken has you';
+      return 'The kraken is holding you up';
     case 'pirate':
-      return 'Cannon fire!';
+      return 'Splashed by the pirates';
     case 'wave':
-      return event.heavy ? 'Slammed by the wave' : 'Rode the wave';
+      return event.heavy ? 'Caught by the wave' : 'Rode the wave';
     case 'whale':
-      return event.heavy ? 'You hit the whale' : 'Soaked by the whale';
+      return event.heavy ? 'Bumped into the whale' : 'Soaked by the whale';
     case 'splash':
       return 'Soaked by the whale';
-    case 'crash':
-      return event.heavy ? 'Heavy collision!' : 'Collision';
-    case 'sunk':
-      return 'Abandon ship!';
+    case 'bump':
+      return event.heavy ? 'Big bump!' : 'Bump!';
+    case 'drydock':
+      return 'Dry dock: a quick refit';
     case 'pickup':
       return player.item ? `${ITEM_NAMES[player.item]} — press Space` : 'Power-up';
     case 'cork':
-      return 'Hit by a champagne cork';
+      return 'Popped by a champagne cork';
     case 'coconut':
       return 'You ran into a coconut';
     case 'blocked':
-      return 'Your shield took the hit';
+      return 'Your shield kept you clear';
   }
 }
 
@@ -699,7 +699,7 @@ function frame(ms: number): void {
 // helm. &t=<seconds> runs the race ahead first, &near=<n> runs it until the
 // player is coming up to the nth hazard, &solo leaves out the rivals,
 // &hold stops the race there (with &cycle=<0..1> for a whale's routine, and
-// &hull=<0..1>, &sinking=<seconds>, &shield, &boost for the player's ship), and
+// &hull=<0..1>, &docked=<seconds left>, &shield, &boost for the player's ship), and
 // &cam=bridge picks the camera.
 // ?inspect=<class id>&angle=<radians>&dist=<lengths>&h=<lengths> shows one ship
 // from a fixed angle with no menus, for checking the models.
@@ -729,7 +729,7 @@ if (demoTrack !== null) {
       near.strength = 1;
     }
     me.hull = Number(params.get('hull') ?? me.hull);
-    me.sinking = Number(params.get('sinking') ?? 0);
+    me.docked = Number(params.get('docked') ?? 0);
     if (params.has('shield')) me.shield = 10;
     if (params.has('boost')) me.boost = 3;
     me.item = 'cork';

@@ -230,7 +230,7 @@ describe('a race over the network', () => {
     expect(hits).toBeGreaterThan(0);
   });
 
-  it('shows a joining player damage, power-ups, and what is in the water', () => {
+  it('shows a joining player the state of the hull, power-ups, and what is in the water', () => {
     const track = new Track(TRACKS[0]);
     const entries = [0, 1].map((i) => ({ cls: SHIP_CLASSES[i], name: `Ship ${i}`, isPlayer: i === 0, pace: 0.95 }));
     const hostRace = new Race(track, entries);

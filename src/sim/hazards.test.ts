@@ -225,7 +225,7 @@ describe('whale crossing', () => {
     expect(ship.state.u).toBeLessThan(cls.topSpeed * 0.8);
   });
 
-  it('stops a ship that runs into it, and does real damage', () => {
+  it('stops a ship that runs into it', () => {
     const track = trackWith('whale');
     const field = new HazardField(track);
     const h = only(field);

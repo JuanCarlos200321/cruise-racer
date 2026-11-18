@@ -34,7 +34,7 @@ export interface HudState {
   /** Name and distance in metres of the next hazard ahead, if there is one. */
   nextHazard: { name: string; distance: number } | null;
   hazardHits: number;
-  /** State of the hull, 1 to 0. */
+  /** How shipshape the ship is, 1 to 0. */
   hull: number;
   /** The power-up in hand. */
   item: { name: string; hint: string } | null;
@@ -481,9 +481,9 @@ export class Ui {
 
     const hull = this.el('hud-hull');
     hull.style.width = `${Math.max(0, hud.hull) * 100}%`;
-    hull.className = hud.hull < 0.5 ? 'critical' : hud.hull < 0.9 ? 'damaged' : '';
-    // Three collisions sink a ship.
-    this.el('hud-hull-label').textContent = `HULL ${Math.round(Math.max(0, hud.hull) * 3)}/3`;
+    hull.className = hud.hull < 0.5 ? 'low' : hud.hull < 0.9 ? 'worn' : '';
+    // Three bumps and the ship goes into dry dock.
+    this.el('hud-hull-label').textContent = `SHIPSHAPE ${Math.round(Math.max(0, hud.hull) * 3)}/3`;
     this.el('hud-item').classList.toggle('empty', !hud.item);
     this.el('hud-item-name').textContent = hud.item?.name ?? 'None';
     this.el('hud-item-hint').textContent = hud.item ? `${hud.item.hint} · Space` : 'Sail through a gift box';

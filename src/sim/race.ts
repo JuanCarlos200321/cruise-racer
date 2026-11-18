@@ -1,6 +1,6 @@
 import { AiDriver } from './ai';
 import { resolveObstacles, resolveShips } from './collision';
-import { absorb, hurt, type RaceEvent } from './events';
+import { absorb, wear, type RaceEvent } from './events';
 import { HazardField, PIRATE_HULL_RADIUS } from './hazards';
 import { ItemField, type ItemKind } from './items';
 import { createShipState, forward, starboard, stepShip, type Helm, type ShipState } from './physics';
@@ -55,21 +55,21 @@ export interface Racer {
   stalledFor: number;
   /** Times a hazard has caught this ship. */
   hazardHits: number;
-  /** State of the hull, from 1 (sound) to 0 (going down). Each collision takes a third. A damaged ship is slower. */
+  /** State of the hull, from 1 (shipshape) to 0 (due in dry dock). Each bump takes a third. A worn ship is slower. */
   hull: number;
-  /** Seconds left going down, or 0 when afloat. The ship comes back where it sank. */
-  sinking: number;
+  /** Seconds left in dry dock, or 0 when under way. The ship is held where it was when the dock came up. */
+  docked: number;
   /** The power-up the ship is holding, and for how many seconds it has had it. */
   item: ItemKind | null;
   itemHeld: number;
   /** Seconds of boost and of shield left. */
   boost: number;
   shield: number;
-  /** Seconds until another collision can damage the ship: one crash is one blow, however long the hulls grind. */
-  crashProof: number;
-  /** Where the ship went down, and where it comes back. */
-  wreckX: number;
-  wreckZ: number;
+  /** Seconds until another bump counts: one meeting of hulls is one bump, however long they rub. */
+  bumpProof: number;
+  /** Where the ship is in dry dock. */
+  dockX: number;
+  dockZ: number;
 }
 
 export type RacePhase = 'countdown' | 'racing';
@@ -86,19 +86,18 @@ const GRID_SPREAD = 0.7;
 const AI_LANE_SHARE = 0.8;
 /** An AI ship stopped for this long is put back on the route. */
 const AI_RESCUE_AFTER = 10;
-/** Closing speed below which a bump does not count as a collision, m/s. */
-const CRASH_THRESHOLD = 14;
-/** Closing speed above which a collision is shown as a heavy one, m/s. */
-const HEAVY_CRASH = 45;
-/** This many collisions sink a ship. */
-export const COLLISIONS_TO_SINK = 3;
-const CRASH_COOLDOWN = 1.2;
+/** Closing speed below which a touch does not count as a bump, m/s. */
+const BUMP_THRESHOLD = 14;
+/** Closing speed above which a bump is shown as a big one, m/s. */
+const HEAVY_BUMP = 45;
+/** This many bumps send a ship into dry dock. */
+export const BUMPS_TO_DOCK = 3;
+const BUMP_COOLDOWN = 1.2;
 /** Extra drag on a ship with no hull left, as a share of normal drag. */
-const DAMAGE_DRAG = 0.6;
-/** How long a sunk ship is out of the race before it comes back where it went down. */
-export const SINK_SECONDS = 5;
-const SINKING_DRAG = 10;
-/** Shield a ship gets when it comes back after sinking, seconds. */
+const WEAR_DRAG = 0.6;
+/** How long a ship spends in dry dock before it sets off again. */
+export const DOCK_SECONDS = 5;
+/** Shield a ship gets when it leaves dry dock, seconds. */
 const RESPAWN_SHIELD = 4;
 const BOOST_DRAG = 0.55;
 /** Extra push while boosting, as a share of the ship's acceleration. */
@@ -154,14 +153,14 @@ export class Race {
         stalledFor: 0,
         hazardHits: 0,
         hull: 1,
-        sinking: 0,
+        docked: 0,
         item: null,
         itemHeld: 0,
         boost: 0,
         shield: 0,
-        crashProof: 0,
-        wreckX: 0,
-        wreckZ: 0,
+        bumpProof: 0,
+        dockX: 0,
+        dockZ: 0,
       });
     });
   }
@@ -211,12 +210,12 @@ export class Race {
       const others = this.racers.filter((r) => r !== racer);
       racer.boost = Math.max(0, racer.boost - dt);
       racer.shield = Math.max(0, racer.shield - dt);
-      racer.crashProof = Math.max(0, racer.crashProof - dt);
+      racer.bumpProof = Math.max(0, racer.bumpProof - dt);
       if (racer.item) racer.itemHeld += dt;
 
       let helm: Helm;
       const human = racer.autopilot || racer.finished ? null : racer.isPlayer ? playerHelm : racer.helm;
-      if (racer.sinking > 0) {
+      if (racer.docked > 0) {
         helm = { throttle: 0, rudder: 0 };
       } else if (human) {
         helm = human;
@@ -230,11 +229,10 @@ export class Race {
       let drag = 1;
       if (racer.offCourse) drag = OFF_COURSE_DRAG;
       else if (racer.drafting) drag = DRAFT_DRAG;
-      drag *= 1 + (1 - racer.hull) * DAMAGE_DRAG;
-      if (racer.sinking > 0) drag *= SINKING_DRAG;
-      else if (racer.boost > 0) drag *= BOOST_DRAG;
+      drag *= 1 + (1 - racer.hull) * WEAR_DRAG;
+      if (racer.boost > 0 && racer.docked <= 0) drag *= BOOST_DRAG;
       stepShip(racer.state, helm, racer.cls, dt, drag);
-      if (racer.boost > 0 && racer.sinking <= 0) racer.state.u += racer.cls.accel * BOOST_THRUST * dt;
+      if (racer.boost > 0 && racer.docked <= 0) racer.state.u += racer.cls.accel * BOOST_THRUST * dt;
     }
 
     if (this.hazards) {
@@ -251,7 +249,7 @@ export class Race {
       if (solids.length) {
         racer.impact = Math.max(racer.impact, resolveObstacles(racer.state, racer.cls, solids));
       }
-      this.crash(racer, racer.impact);
+      this.bump(racer, racer.impact);
     }
     for (let i = 0; i < this.racers.length; i++) {
       for (let j = i + 1; j < this.racers.length; j++) {
@@ -261,32 +259,32 @@ export class Race {
         if (impact <= 0) continue;
         a.impact = Math.max(a.impact, impact);
         b.impact = Math.max(b.impact, impact);
-        this.crash(a, impact);
-        this.crash(b, impact);
+        this.bump(a, impact);
+        this.bump(b, impact);
       }
     }
 
     for (const racer of this.racers) {
-      if (racer.sinking > 0) {
-        racer.sinking -= dt;
-        if (racer.sinking <= 0) {
-          racer.sinking = 0;
-          // Back afloat where the last collision happened, stopped.
-          Object.assign(racer.state, { x: racer.wreckX, z: racer.wreckZ, u: 0, v: 0, r: 0 });
+      if (racer.docked > 0) {
+        racer.docked -= dt;
+        if (racer.docked <= 0) {
+          racer.docked = 0;
           racer.hull = 1;
           racer.shield = RESPAWN_SHIELD;
         }
       } else if (racer.hull <= 0) {
-        racer.sinking = SINK_SECONDS;
-        racer.wreckX = racer.state.x;
-        racer.wreckZ = racer.state.z;
+        racer.docked = DOCK_SECONDS;
+        racer.dockX = racer.state.x;
+        racer.dockZ = racer.state.z;
         racer.boost = 0;
         racer.item = null;
         racer.stalledFor = 0;
-        this.events.push(this.eventFor('sunk', racer, true));
+        this.events.push(this.eventFor('drydock', racer, true));
       }
+      // The dock holds its ship still, whatever runs into it.
+      if (racer.docked > 0) Object.assign(racer.state, { x: racer.dockX, z: racer.dockZ, u: 0, v: 0, r: 0 });
       this.updateProgress(racer);
-      if (racer.finished || racer.sinking > 0) continue;
+      if (racer.finished || racer.docked > 0) continue;
       const held = this.hazards?.isHeld(racer.id) ?? false;
       if (held) racer.ai.held();
       racer.stalledFor = Math.abs(racer.state.u) < 5 && !held ? racer.stalledFor + dt : 0;
@@ -302,18 +300,18 @@ export class Race {
     if (this.phase === 'racing') this.items?.use(racer);
   }
 
-  /** Count a collision against a racer's hull, unless its shield takes it. */
-  private crash(racer: Racer, impact: number): void {
-    if (impact < CRASH_THRESHOLD || racer.sinking > 0 || racer.crashProof > 0) return;
-    racer.crashProof = CRASH_COOLDOWN;
+  /** Count a bump against a racer's hull, unless its shield takes it. */
+  private bump(racer: Racer, impact: number): void {
+    if (impact < BUMP_THRESHOLD || racer.docked > 0 || racer.bumpProof > 0) return;
+    racer.bumpProof = BUMP_COOLDOWN;
     if (absorb(racer)) {
       this.events.push(this.eventFor('blocked', racer, false));
       return;
     }
-    hurt(racer, 1 / COLLISIONS_TO_SINK);
+    wear(racer, 1 / BUMPS_TO_DOCK);
     // Thirds do not add up exactly.
     if (racer.hull < 0.01) racer.hull = 0;
-    this.events.push(this.eventFor('crash', racer, impact > HEAVY_CRASH));
+    this.events.push(this.eventFor('bump', racer, impact > HEAVY_BUMP));
   }
 
   private eventFor(kind: RaceEvent['kind'], racer: Racer, heavy: boolean): RaceEvent {

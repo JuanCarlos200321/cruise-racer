@@ -122,7 +122,7 @@ export function takeSnapshot(race: Race, at: number, events: RaceEvent[]): Snaps
         r.drafting ? 1 : 0,
         r.hazardHits,
         round(r.hull),
-        round(r.sinking),
+        round(r.docked),
         r.item ? ITEM_KINDS.indexOf(r.item) : -1,
         round(r.boost),
         round(r.shield),
@@ -177,7 +177,7 @@ function applyBetween(race: Race, a: Snapshot, b: Snapshot, t: number): void {
     racer.drafting = q[14] === 1;
     racer.hazardHits = q[15];
     racer.hull = lerp(p[16], q[16], t);
-    racer.sinking = q[17];
+    racer.docked = q[17];
     racer.item = ITEM_KINDS[q[18]] ?? null;
     racer.boost = q[19];
     racer.shield = q[20];

@@ -4,8 +4,8 @@ import type { Track } from '../sim/track';
 import type { RaceEvent } from '../sim/events';
 import type { Hazard } from '../sim/hazards';
 import type { ItemField } from '../sim/items';
-import { SINK_SECONDS } from '../sim/race';
 import { Course } from './course';
+import { DOCK_LIFT, DryDock } from './drydock';
 import { Effects } from './effects';
 import { HazardViews } from './hazards';
 import { ItemViews } from './items';
@@ -16,20 +16,18 @@ import { atmosphereFor, createSkyDome, type Atmosphere } from './sky';
 import { Wake } from './wake';
 
 const SHADOW_RANGE = 420;
-const SMOKE_PUFFS = 7;
-const PUFF_GEOMETRY = new THREE.IcosahedronGeometry(1, 1);
 const BUBBLE_GEOMETRY = new THREE.SphereGeometry(1, 32, 20);
 const SPRAY_GEOMETRY = new THREE.ConeGeometry(1, 1, 12, 1, true).rotateX(-Math.PI / 2).translate(0, 0, -0.5);
 
-/** The state of a ship that shows: damage, going down, boosting, shielded. */
+/** The state of a ship that shows: in dry dock, boosting, shielded. */
 export interface ShipCondition {
   hull: number;
-  sinking: number;
+  docked: number;
   boost: number;
   shield: number;
 }
 
-const SOUND: ShipCondition = { hull: 1, sinking: 0, boost: 0, shield: 0 };
+const SOUND: ShipCondition = { hull: 1, docked: 0, boost: 0, shield: 0 };
 
 /** A ship as drawn: model, wake, and the small motions that make it feel afloat. */
 export class ShipView {
@@ -40,8 +38,7 @@ export class ShipView {
   private roll = 0;
   private pitch = 0;
   private readonly phase = Math.random() * 10;
-  private readonly smoke: THREE.Mesh<THREE.BufferGeometry, THREE.MeshBasicMaterial>[] = [];
-  private readonly fire: THREE.Mesh;
+  private readonly dock: DryDock;
   private readonly bubble: THREE.Mesh<THREE.BufferGeometry, THREE.MeshBasicMaterial>;
   private readonly spray: THREE.Mesh;
 
@@ -51,17 +48,9 @@ export class ShipView {
     this.bridge = bridgeOf(this.model);
     this.wake = new Wake(cls, time);
 
-    for (let i = 0; i < SMOKE_PUFFS; i++) {
-      const puff = new THREE.Mesh(
-        PUFF_GEOMETRY,
-        new THREE.MeshBasicMaterial({ color: '#26262a', transparent: true, opacity: 0, depthWrite: false }),
-      );
-      puff.visible = false;
-      this.smoke.push(puff);
-      this.root.add(puff);
-    }
-    this.fire = new THREE.Mesh(PUFF_GEOMETRY, new THREE.MeshBasicMaterial({ color: '#ff7a1a' }));
-    this.fire.visible = false;
+    this.dock = new DryDock(cls);
+    this.root.add(this.dock.group);
+
     this.bubble = new THREE.Mesh(
       BUBBLE_GEOMETRY,
       new THREE.MeshBasicMaterial({
@@ -81,12 +70,13 @@ export class ShipView {
     );
     this.spray.position.set(0, 2, -cls.length * 0.47);
     this.spray.visible = false;
-    this.root.add(this.fire, this.bubble, this.spray);
+    this.root.add(this.bubble, this.spray);
   }
 
   dispose(): void {
     this.wake.dispose();
-    for (const mesh of [...this.smoke, this.fire, this.bubble, this.spray]) (mesh.material as THREE.Material).dispose();
+    this.dock.dispose();
+    for (const mesh of [this.bubble, this.spray]) (mesh.material as THREE.Material).dispose();
   }
 
   /**
@@ -115,26 +105,12 @@ export class ShipView {
     this.roll += (heel + swell - this.roll) * blend;
     const squat = -throttle * 0.006 + Math.sin(now * 0.37 + this.phase * 2) * 0.003;
     this.pitch += (squat - this.pitch) * blend;
-    // Going down: bow first, rolling over.
-    const down = condition.sinking > 0 ? 1 - condition.sinking / SINK_SECONDS : 0;
-    this.model.rotation.set(this.pitch + down * 0.42, 0, this.roll + down * 0.35);
-    this.model.position.y = Math.sin(now * 0.43 + this.phase) * 0.35 - down * this.cls.height * 0.85;
+    // In dry dock the ship is lifted level and clear of the water.
+    const lift = this.dock.pose(condition.docked, now);
+    this.model.rotation.set(this.pitch * (1 - lift), 0, this.roll * (1 - lift));
+    this.model.position.y = Math.sin(now * 0.43 + this.phase) * 0.35 * (1 - lift) + lift * DOCK_LIFT;
 
-    // Smoke thickens as the hull goes, and fire shows when it is nearly gone.
     const cls = this.cls;
-    const damage = THREE.MathUtils.clamp((0.75 - condition.hull) / 0.6, 0, 1);
-    this.smoke.forEach((puff, i) => {
-      puff.visible = damage > 0;
-      if (damage <= 0) return;
-      const t = (now * 0.3 + i / SMOKE_PUFFS + this.phase) % 1;
-      puff.position.set(Math.sin(i * 2.1) * 7, cls.height * 0.9 + t * 120, -cls.length * 0.12 - t * THREE.MathUtils.clamp(speed, 0, 110) * 1.4);
-      puff.scale.setScalar((7 + t * 24) * (0.6 + 0.4 * damage));
-      puff.material.opacity = (1 - t) * 0.7 * damage;
-    });
-    this.fire.visible = condition.hull < 0.35 && down < 0.7;
-    this.fire.position.set(0, cls.height * 0.95, -cls.length * 0.12);
-    this.fire.scale.set(9 + Math.sin(now * 17) * 2, 13 + Math.sin(now * 23 + 1) * 4, 9 + Math.sin(now * 19) * 2);
-
     // The shield flickers as it runs out.
     this.bubble.visible = condition.shield > 0 && (condition.shield > 2 || Math.sin(now * 18) > 0);
     this.bubble.material.opacity = 0.3 + Math.sin(now * 4) * 0.08;
