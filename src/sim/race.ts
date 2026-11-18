@@ -67,9 +67,10 @@ export interface Racer {
   shield: number;
   /** Seconds until another bump counts: one meeting of hulls is one bump, however long they rub. */
   bumpProof: number;
-  /** Where the ship is in dry dock. */
+  /** Where the ship was and how it was heading when the dry dock came up under it. */
   dockX: number;
   dockZ: number;
+  dockHeading: number;
 }
 
 export type RacePhase = 'countdown' | 'racing';
@@ -97,6 +98,9 @@ const BUMP_COOLDOWN = 1.2;
 const WEAR_DRAG = 0.6;
 /** How long a ship spends in dry dock before it sets off again. */
 export const DOCK_SECONDS = 5;
+/** The part of the stay, as shares of it, in which the dock lines its ship up with the route. */
+const DOCK_TURN_FROM = 0.25;
+const DOCK_TURN_TO = 0.75;
 /** Shield a ship gets when it leaves dry dock, seconds. */
 const RESPAWN_SHIELD = 4;
 const BOOST_DRAG = 0.55;
@@ -161,6 +165,7 @@ export class Race {
         bumpProof: 0,
         dockX: 0,
         dockZ: 0,
+        dockHeading: 0,
       });
     });
   }
@@ -276,13 +281,13 @@ export class Race {
         racer.docked = DOCK_SECONDS;
         racer.dockX = racer.state.x;
         racer.dockZ = racer.state.z;
+        racer.dockHeading = racer.state.heading;
         racer.boost = 0;
         racer.item = null;
         racer.stalledFor = 0;
         this.events.push(this.eventFor('drydock', racer, true));
       }
-      // The dock holds its ship still, whatever runs into it.
-      if (racer.docked > 0) Object.assign(racer.state, { x: racer.dockX, z: racer.dockZ, u: 0, v: 0, r: 0 });
+      if (racer.docked > 0) this.holdInDock(racer);
       this.updateProgress(racer);
       if (racer.finished || racer.docked > 0) continue;
       const held = this.hazards?.isHeld(racer.id) ?? false;
@@ -298,6 +303,29 @@ export class Race {
   /** Use the power-up a racer is holding, if the race is under way. */
   useItem(racer: Racer): void {
     if (this.phase === 'racing') this.items?.use(racer);
+  }
+
+  /**
+   * The dock holds its ship, whatever runs into it, and while the ship is up
+   * out of the water carries it to the middle of the channel and turns it to
+   * face along the route, ready to set off for the finish.
+   */
+  private holdInDock(racer: Racer): void {
+    const track = this.track;
+    const index = track.clampIndex(racer.trackIndex);
+    const centre = track.pointAt(index);
+    const through = 1 - racer.docked / DOCK_SECONDS;
+    const c = Math.min(1, Math.max(0, (through - DOCK_TURN_FROM) / (DOCK_TURN_TO - DOCK_TURN_FROM)));
+    const t = c * c * (3 - 2 * c);
+    const turn = track.headingAt(index) - racer.dockHeading;
+    Object.assign(racer.state, {
+      x: racer.dockX + (centre.x - racer.dockX) * t,
+      z: racer.dockZ + (centre.z - racer.dockZ) * t,
+      heading: racer.dockHeading + Math.atan2(Math.sin(turn), Math.cos(turn)) * t,
+      u: 0,
+      v: 0,
+      r: 0,
+    });
   }
 
   /** Count a bump against a racer's hull, unless its shield takes it. */

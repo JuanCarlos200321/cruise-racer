@@ -326,7 +326,7 @@ describe('bumps and the dry dock', () => {
     expect(worn).toBeGreaterThan(sound * 0.6);
   });
 
-  it('a ship with no hull left is held in dry dock where it is, then sets off shipshape', () => {
+  it('a ship with no hull left is held in dry dock, then sets off shipshape', () => {
     const race = new Race(track, [{ cls, name: 'Test', isPlayer: false, pace: 1 }], { hazards: false });
     const racer = race.racers[0];
     for (let i = 0; i < 60 * 60; i++) race.step(DT, { throttle: 0, rudder: 0 });
@@ -341,15 +341,37 @@ describe('bumps and the dry dock', () => {
     for (let i = 0; i < (DOCK_SECONDS - 0.5) * 60; i++) race.step(DT, { throttle: 0, rudder: 0 });
     expect(racer.docked).toBeGreaterThan(0);
     expect(racer.state.u).toBe(0);
-    expect(Math.hypot(racer.state.x - dock.x, racer.state.z - dock.z)).toBeLessThan(2);
+    expect(Math.hypot(racer.state.x - dock.x, racer.state.z - dock.z)).toBeLessThan(20);
 
     for (let i = 0; i < 31; i++) race.step(DT, { throttle: 0, rudder: 0 });
     expect(racer.docked).toBe(0);
     expect(racer.hull).toBe(1);
     expect(racer.shield).toBeGreaterThan(0);
     // It has had a moment to get under way again.
-    expect(Math.hypot(racer.state.x - dock.x, racer.state.z - dock.z)).toBeLessThan(5);
+    expect(Math.hypot(racer.state.x - dock.x, racer.state.z - dock.z)).toBeLessThan(25);
     expect(race.events.filter((e) => e.kind === 'drydock')).toHaveLength(1);
+  });
+
+  it('the dry dock leaves a ship in the middle of the channel, facing the finish', () => {
+    const race = new Race(track, [{ cls, name: 'Test', isPlayer: true, pace: 1 }], { hazards: false });
+    const racer = race.player;
+    for (let i = 0; i < 20 * 60; i++) race.step(DT, { throttle: 1, rudder: 0 });
+    // Out to one side and pointing back the way it came.
+    const index = racer.trackIndex;
+    const p = track.pointAt(index, track.halfWidth * 0.6);
+    Object.assign(racer.state, { x: p.x, z: p.z, heading: track.headingAt(index) + 2.8, u: 5 });
+    racer.hull = 0;
+    race.step(DT, { throttle: 0, rudder: 0 });
+    expect(Math.abs(racer.lateral)).toBeGreaterThan(track.halfWidth * 0.5);
+
+    for (let i = 0; i < DOCK_SECONDS * 60 - 2; i++) race.step(DT, { throttle: 0, rudder: 0 });
+    expect(racer.docked).toBeGreaterThan(0);
+    expect(Math.abs(racer.lateral)).toBeLessThan(5);
+    const here = track.nearest(racer.state.x, racer.state.z).index;
+    expect(Math.abs(here - index)).toBeLessThanOrEqual(2);
+    const off = racer.state.heading - track.headingAt(here);
+    expect(Math.abs(Math.atan2(Math.sin(off), Math.cos(off)))).toBeLessThan(0.05);
+    expect(race.isWrongWay(racer)).toBe(false);
   });
 
   it('a full field still gets everyone to the destination', () => {
